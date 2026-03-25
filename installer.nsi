@@ -6,16 +6,17 @@ OutFile "Rclone-Optimized.exe"
 RequestExecutionLevel user
 SilentInstall silent
 
-Section "Main"
-  SetOutPath "$TEMP"
+InstallDir "$LOCALAPPDATA\RcloneMountManager"
 
-  File "Rclone-Optimized.ps1"
+Section "Main"
+  SetOutPath "$INSTDIR"
+
+  File "Mount-GDrive.ps1"
   File "Run-Rclone.bat"
 
-  ; Execute the batch file silently using cmd.exe
-  nsExec::ExecToStack 'cmd.exe /C "$TEMP\Run-Rclone.bat"'
+  ; Create a shortcut on the Desktop to launch the Run-Rclone.bat silently
+  CreateShortCut "$DESKTOP\Rclone Mount.lnk" "$INSTDIR\Run-Rclone.bat" "" "$INSTDIR\Run-Rclone.bat" 0 SW_SHOWMINIMIZED
 
-  ; Delete extracted files
-  Delete "$TEMP\Rclone-Optimized.ps1"
-  Delete "$TEMP\Run-Rclone.bat"
+  ; Execute the batch file silently using cmd.exe
+  nsExec::ExecToStack 'cmd.exe /C "$INSTDIR\Run-Rclone.bat"'
 SectionEnd
