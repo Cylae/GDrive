@@ -16,6 +16,12 @@ This suite is designed for power users who require absolute stability, zero-I/O 
 - **Anomaly Clearance & State Reset**: Automatically cleans up stale PID files, forcefully kills hanging `rclone` daemon threads, and clears old VFS cache chunks to prevent disk bloat.
 - **Bandwidth Limits & Log Rotation**: Natively cap bandwidth and rotate log files automatically once they exceed 5MB.
 
+### ⚡ Under the Hood: Performance Optimizations
+These scripts configure `rclone` mounts with highly optimized flags designed for API-limit avoidance and streaming:
+- **`--vfs-read-chunk-size 128M`** & **`--vfs-read-chunk-size-limit off`**: Significantly reduces API rate limits when streaming media by pulling massive chunks dynamically instead of tiny 16MB slivers.
+- **`--vfs-read-ahead 128M`**: Buffers the next 128MB of the file proactively into RAM, eliminating stutter in high-bitrate playback.
+- **`--tpslimit 10`** & **`--tpslimit-burst 20`**: Imposes a hard cap on API queries to prevent cloud providers (like Google Drive) from issuing 24-hour rate limit bans, while allowing small bursts for directory browsing.
+
 ---
 
 ## 📦 Zero-Touch Prerequisites (Auto-Install)

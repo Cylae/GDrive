@@ -445,6 +445,8 @@ function Invoke-Mount {
         "--vfs-write-back",       "5s",
         "--buffer-size",          $Buf,
         "--vfs-read-ahead",       "128M",
+        "--vfs-read-chunk-size",  "128M",
+        "--vfs-read-chunk-size-limit", "off",
         "--drive-chunk-size",     $Chunk,
         "--dir-cache-time",       "72h",
         "--attr-timeout",         "1h",

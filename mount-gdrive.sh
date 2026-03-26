@@ -129,6 +129,19 @@ has_cmd() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Safely unmount a path across OSes
+unmount_path() {
+    local m_point="$1"
+    if mount | grep -q "on ${m_point} "; then
+        if [ "$OS" = "Darwin" ]; then
+            diskutil unmount force "$m_point" >/dev/null 2>&1 || umount -f "$m_point" >/dev/null 2>&1
+        else
+            fusermount -uz "$m_point" >/dev/null 2>&1 || umount -f "$m_point" >/dev/null 2>&1
+        fi
+        log OK "Unmounted $m_point"
+    fi
+}
+
 assert_prerequisites() {
     log HEAD "Prerequisites (Auto-Installer)"
 
@@ -315,13 +328,7 @@ invoke_mount() {
     fi
 
     # Unmount stale mountpoint
-    if mount | grep -q "on ${m_point} "; then
-        if [ "$OS" = "Darwin" ]; then
-            diskutil unmount force "$m_point" >/dev/null 2>&1 || umount -f "$m_point" >/dev/null 2>&1
-        else
-            fusermount -uz "$m_point" >/dev/null 2>&1 || umount -f "$m_point" >/dev/null 2>&1
-        fi
-    fi
+    unmount_path "$m_point"
 
     assert_remote_exists "$r_name"
 
@@ -334,6 +341,8 @@ invoke_mount() {
         --vfs-write-back 5s
         --buffer-size "$BUFFER_SIZE"
         --vfs-read-ahead 128M
+        --vfs-read-chunk-size 128M
+        --vfs-read-chunk-size-limit off
         --drive-chunk-size "$DRIVE_CHUNK_SIZE"
         --dir-cache-time 72h
         --attr-timeout 1h
@@ -426,14 +435,7 @@ invoke_unmount() {
             continue
         fi
 
-        if mount | grep -q "on ${m_point} "; then
-            if [ "$OS" = "Darwin" ]; then
-                diskutil unmount force "$m_point" >/dev/null 2>&1 || umount -f "$m_point" >/dev/null 2>&1
-            else
-                fusermount -uz "$m_point" >/dev/null 2>&1 || umount -f "$m_point" >/dev/null 2>&1
-            fi
-            log OK "Unmounted $m_point"
-        fi
+        unmount_path "$m_point"
     done
     sleep 2
 }
@@ -584,7 +586,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 ExecStart=$exec_start
-RemainAfterExit=yes
+RemainAfterExit=no
 ExecStop=$SCRIPT_PATH -a unmount
 
 [Install]
