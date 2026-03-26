@@ -282,7 +282,7 @@ function Assert-NetworkConnectivity {
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Disk space check
+#  Disk space check (Optimized)
 # ══════════════════════════════════════════════════════════════════════════════
 function Assert-DiskSpace {
     param([string] $Path, [int] $RequiredGB = 5)
@@ -292,8 +292,8 @@ function Assert-DiskSpace {
     $freeGB = if ($drive) {
         [math]::Round($drive.Free / 1GB, 1)
     } else {
-        $wmi = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='${letter}:'" -ErrorAction SilentlyContinue
-        if ($wmi) { [math]::Round($wmi.FreeSpace / 1GB, 1) } else { 999 }
+        $cim = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='${letter}:'" -ErrorAction SilentlyContinue
+        if ($cim) { [math]::Round($cim.FreeSpace / 1GB, 1) } else { 999 }
     }
 
     if ($freeGB -lt $RequiredGB) {
@@ -305,7 +305,7 @@ function Assert-DiskSpace {
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Mount point availability (double-checked: PowerShell + WMI)
+#  Mount point availability (double-checked: PowerShell + CIM)
 # ══════════════════════════════════════════════════════════════════════════════
 function Assert-MountPointFree {
     param([string] $Letter)
@@ -315,9 +315,9 @@ function Assert-MountPointFree {
         Write-Log "FAIL" "$Letter is already in use. Choose another letter with -MountPoint."
         exit 1
     }
-    $wmi = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='$Letter'" -ErrorAction SilentlyContinue
-    if ($wmi) {
-        Write-Log "FAIL" "$Letter is occupied (WMI DriveType: $($wmi.DriveType)). Choose another letter."
+    $cim = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$Letter'" -ErrorAction SilentlyContinue
+    if ($cim) {
+        Write-Log "FAIL" "$Letter is occupied (CIM DriveType: $($cim.DriveType)). Choose another letter."
         exit 1
     }
     Write-Log "OK" "$Letter is free."
@@ -497,18 +497,18 @@ function Invoke-Mount {
     }
 
     # Wait up to 20s for the drive letter to become visible in the shell
-    $timeout = 20; $elapsed = 0; $mounted = $false
+    # Fast polling loop (every 200ms) for snappy startup
+    $timeout = 20000; $elapsed = 0; $mounted = $false
     while ($elapsed -lt $timeout) {
-        # For network mode mounts or elevated mounts, Get-PSDrive can fail to see it immediately.
         if (Test-Path "$($Letter)\" -ErrorAction SilentlyContinue) { $mounted = $true; break }
-        Start-Sleep -Seconds 1; $elapsed++
+        Start-Sleep -Milliseconds 200; $elapsed += 200
     }
 
     if ($mounted) {
         Write-Log "OK" "SUCCESS -- $Letter  |  PID: $($proc.Id)  |  Remote: ${RemoteName}:"
         Send-Toast -Title "Drive Mounted" -Body "${RemoteName}: -> $Letter (PID $($proc.Id))"
     } else {
-        Write-Log "WARN" "$Letter not visible after ${timeout}s. rclone (PID $($proc.Id)) is still running."
+        Write-Log "WARN" "$Letter not visible after $([math]::Round($timeout/1000))s. rclone (PID $($proc.Id)) is still running."
         Write-Log "WARN" "WinFsp may need a moment. Check: $logFile"
     }
 }

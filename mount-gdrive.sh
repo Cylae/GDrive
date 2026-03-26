@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 
 # Universal rclone cloud storage mount manager for Linux & macOS
-# Supports multi-remote mounting from JSON config, auto-start, watchdog, status dashboard.
+# Features: Multi-remote JSON config, OS-Native Daemons (systemd/launchd), Auto-Start, Watchdog
 
 set -e
 
-# Default settings
 ACTION="mount"
 REMOTE="gdrive"
 CACHE_PATH="$HOME/.rcloneCache"
@@ -16,17 +15,13 @@ BW_LIMIT="0"
 CACHE_MAX_SIZE="20G"
 CONFIG_FILE=""
 WATCHDOG=false
-WATCHDOG_INTERVAL=2
-LOG_MAX_BYTES=5242880 # 5MB
 
-# Determine OS
 OS=$(uname -s)
 if [ "$OS" = "Darwin" ]; then
     DEFAULT_MOUNT="$HOME/gdrive"
 else
     DEFAULT_MOUNT="/mnt/gdrive"
 fi
-
 MOUNT_POINT="$DEFAULT_MOUNT"
 
 usage() {
@@ -34,24 +29,17 @@ usage() {
 Usage: $0 [options]
 
 Options:
-  -a, --action ACTION      mount|unmount|status|restart|install|uninstall (default: mount)
+  -a, --action ACTION      mount|unmount|status|daemon|install|uninstall (default: mount)
   -r, --remote REMOTE      rclone remote name (default: gdrive)
   -m, --mount-point PATH   Target directory (default: $DEFAULT_MOUNT)
   -c, --cache-path PATH    Root directory for VFS cache and logs (default: $CACHE_PATH)
-  --vfs-cache-mode MODE    off|minimal|writes|full (default: full)
-  --buffer-size SIZE       Read-ahead buffer (default: 128M)
-  --drive-chunk-size SIZE  Upload chunk size (default: 128M)
-  --bw-limit LIMIT         Bandwidth cap, e.g. 10M (default: 0)
-  --cache-max-size SIZE    Max VFS disk cache size (default: 20G)
   --config-file PATH       JSON config file path (overrides CLI flags)
-  --watchdog               Install a watchdog to auto-remount
-  --watchdog-interval MIN  Minutes between watchdog checks (default: 2)
+  --watchdog               Install an OS-native watchdog to auto-remount on crash
   -h, --help               Show this help
 EOF
     exit 0
 }
 
-# Parse args
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         -a|--action) ACTION="$2"; shift ;;
@@ -65,7 +53,7 @@ while [[ "$#" -gt 0 ]]; do
         --cache-max-size) CACHE_MAX_SIZE="$2"; shift ;;
         --config-file) CONFIG_FILE="$2"; shift ;;
         --watchdog) WATCHDOG=true ;;
-        --watchdog-interval) WATCHDOG_INTERVAL="$2"; shift ;;
+        --watchdog-interval) shift ;; # Deprecated, ignored safely
         -h|--help) usage ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;
     esac
@@ -86,7 +74,6 @@ log() {
     echo -e "  [${ts}] [${level}] ${color}$* \033[0m"
 }
 
-# Python script to parse JSON config safely using bash arrays and avoiding eval injection
 parse_config() {
     cat << 'EOF' | python3 - "$CONFIG_FILE" "$CACHE_PATH"
 import json, sys, shlex
@@ -105,8 +92,6 @@ try:
 
     if data.get("watchdog"):
         print("WATCHDOG=true")
-    if data.get("watchdogIntervalMinutes"):
-        print(f"WATCHDOG_INTERVAL={shlex.quote(str(data.get('watchdogIntervalMinutes')))}")
 
     print("REMOTES=()")
     print("MOUNT_POINTS=()")
@@ -124,12 +109,8 @@ except Exception as e:
 EOF
 }
 
-# Check if command exists
-has_cmd() {
-    command -v "$1" >/dev/null 2>&1
-}
+has_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-# Safely unmount a path across OSes
 unmount_path() {
     local m_point="$1"
     if mount | grep -q "on ${m_point} "; then
@@ -144,15 +125,12 @@ unmount_path() {
 
 assert_prerequisites() {
     log HEAD "Prerequisites (Auto-Installer)"
-
     local needs_restart=false
 
-    # 1. Rclone
     if ! has_cmd rclone; then
         log WARN "rclone not found. Attempting auto-installation..."
         if [ "$OS" = "Darwin" ]; then
             if ! has_cmd brew; then
-                log WARN "Homebrew not found. Installing Homebrew..."
                 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
             fi
             brew install rclone
@@ -160,9 +138,8 @@ assert_prerequisites() {
             sudo -v || true
             curl -fsSL https://rclone.org/install.sh | sudo bash
         fi
-
         if ! has_cmd rclone; then
-            log FAIL "rclone auto-install failed. Please install manually."
+            log FAIL "rclone auto-install failed."
             exit 1
         fi
         needs_restart=true
@@ -170,7 +147,6 @@ assert_prerequisites() {
     local v=$(rclone version | grep "rclone v" | head -n 1 | xargs)
     log OK "rclone -- $v"
 
-    # 2. FUSE Dependencies
     if [ "$OS" = "Darwin" ]; then
         if ! has_cmd macfuse && [ ! -d "/Library/Filesystems/macfuse.fs" ]; then
             log WARN "macFUSE not found. Attempting auto-installation via Homebrew..."
@@ -181,44 +157,29 @@ assert_prerequisites() {
             log INFO "macFUSE requires kernel extension approval in System Settings > Security."
             needs_restart=true
         fi
-        log OK "macFUSE installed."
     else
         if ! has_cmd fusermount && ! has_cmd fusermount3; then
             log WARN "FUSE not found. Attempting auto-installation..."
-            if has_cmd apt-get; then
-                sudo apt-get update && sudo apt-get install -y fuse3
-            elif has_cmd dnf; then
-                sudo dnf install -y fuse3
-            elif has_cmd pacman; then
-                sudo pacman -S --noconfirm fuse3
-            else
-                log FAIL "Unsupported package manager. Please install fuse3 manually."
-                exit 1
-            fi
+            if has_cmd apt-get; then sudo apt-get update && sudo apt-get install -y fuse3
+            elif has_cmd dnf; then sudo dnf install -y fuse3
+            elif has_cmd pacman; then sudo pacman -S --noconfirm fuse3
+            else log FAIL "Unsupported package manager. Please install fuse3 manually."; exit 1; fi
             needs_restart=true
         fi
-        log OK "FUSE subsystem available."
     fi
 
-    # 3. Python 3 (For JSON parsing)
     if [ -n "$CONFIG_FILE" ]; then
         if ! has_cmd python3; then
             log WARN "python3 not found. Attempting auto-installation..."
-            if [ "$OS" = "Darwin" ]; then
-                brew install python
-            elif has_cmd apt-get; then
-                sudo apt-get update && sudo apt-get install -y python3
-            elif has_cmd dnf; then
-                sudo dnf install -y python3
-            elif has_cmd pacman; then
-                sudo pacman -S --noconfirm python3
-            fi
+            if [ "$OS" = "Darwin" ]; then brew install python
+            elif has_cmd apt-get; then sudo apt-get update && sudo apt-get install -y python3
+            elif has_cmd dnf; then sudo dnf install -y python3
+            elif has_cmd pacman; then sudo pacman -S --noconfirm python3; fi
         fi
-        log OK "python3 available."
     fi
 
     if $needs_restart; then
-        log INFO "Dependencies were just installed. You may need to restart your terminal or approve OS security prompts."
+        log INFO "Dependencies were just installed. You may need to restart your terminal."
     fi
 }
 
@@ -228,108 +189,18 @@ assert_remote_exists() {
         log FAIL "Remote '${name}:' not found in rclone.conf."
         exit 1
     fi
-    log OK "Remote '${name}:' validated."
 }
 
-assert_disk_space() {
-    local path="$1"
-    local required_gb=5
-    local free_kb
-
-    if [ "$OS" = "Darwin" ]; then
-        free_kb=$(df -k "$path" | awk 'NR==2 {print $4}')
-    else
-        free_kb=$(df -P -k "$path" | awk 'NR==2 {print $4}')
-    fi
-
-    if [ -n "$free_kb" ]; then
-        local free_gb=$((free_kb / 1024 / 1024))
-        if [ "$free_gb" -lt "$required_gb" ]; then
-            log WARN "Low disk space on cache drive: ${free_gb}GB free (recommended >= ${required_gb}GB)."
-        else
-            log OK "Cache drive: ${free_gb}GB free."
-        fi
-    fi
-}
-
-invoke_log_rotation() {
-    local log_file="$1"
-    if [ ! -f "$log_file" ]; then
-        return
-    fi
-
-    local size
-    if [ "$OS" = "Darwin" ]; then
-        size=$(stat -f%z "$log_file")
-    else
-        size=$(stat -c%s "$log_file")
-    fi
-
-    if [ "$size" -gt "$LOG_MAX_BYTES" ]; then
-        log INFO "Rotating log (exceeds 5MB)..."
-        for i in 3 2 1; do
-            if [ -f "$log_file.$i" ]; then
-                if [ "$i" -eq 3 ]; then
-                    rm -f "$log_file.$i"
-                else
-                    mv "$log_file.$i" "$log_file.$((i+1))"
-                fi
-            fi
-        done
-        mv "$log_file" "$log_file.1"
-    fi
-}
-
-clear_vfs_cache() {
-    log HEAD "VFS Cache Purge"
-    local paths=(
-        "$HOME/.cache/rclone/vfs"
-        "$CACHE_PATH/vfs"
-        "$HOME/Library/Caches/rclone/vfs"
-    )
-    for p in "${paths[@]}"; do
-        if [ -d "$p" ]; then
-            rm -rf "${p:?}/"*
-            log OK "Cleared: $p"
-        fi
-    done
-}
-
-invoke_mount() {
+invoke_daemon() {
     local r_name="$1"
     local m_point="$2"
 
     local log_file="${CACHE_PATH}/mount_${r_name}.log"
-    local pid_file="${CACHE_PATH}/rclone_${r_name}.pid"
-
-    # Check if already mounted
-    if mount | grep -q "on ${m_point} "; then
-        if [ -f "$pid_file" ] && kill -0 $(cat "$pid_file") 2>/dev/null; then
-            log OK "[${r_name}] Already mounted on ${m_point} (PID $(cat "$pid_file")). Skipping."
-            return
-        fi
-    fi
-
     mkdir -p "$CACHE_PATH"
     mkdir -p "$m_point"
 
-    assert_disk_space "$CACHE_PATH"
-    invoke_log_rotation "$log_file"
-
-    # Stop stale process
-    if [ -f "$pid_file" ]; then
-        local old_pid=$(cat "$pid_file")
-        if kill -0 "$old_pid" 2>/dev/null; then
-            log WARN "Stopping stale rclone on ${m_point} (PID $old_pid)..."
-            kill -15 "$old_pid" 2>/dev/null || kill -9 "$old_pid" 2>/dev/null
-            sleep 2
-        fi
-        rm -f "$pid_file"
-    fi
-
-    # Unmount stale mountpoint
+    # In foreground daemon mode, we must strictly clean the path first
     unmount_path "$m_point"
-
     assert_remote_exists "$r_name"
 
     local mount_cmd=(
@@ -353,346 +224,239 @@ invoke_mount() {
         --tpslimit-burst 20
         --log-level INFO
         --log-file "$log_file"
-        --daemon
     )
 
     if [ "$BW_LIMIT" != "0" ]; then
         mount_cmd+=(--bwlimit "$BW_LIMIT")
     fi
 
-    log HEAD "Mounting ${r_name}: -> ${m_point}"
-    log INFO "Cache mode   : $VFS_CACHE_MODE  |  Max size: $CACHE_MAX_SIZE"
-    log INFO "Buffer       : $BUFFER_SIZE  |  Chunk: $DRIVE_CHUNK_SIZE"
-    if [ "$BW_LIMIT" != "0" ]; then log INFO "Bandwidth cap: $BW_LIMIT"; fi
-    log INFO "Log file     : $log_file"
+    log HEAD "Starting Daemon: ${r_name}: -> ${m_point}"
 
-    # Execute and capture daemonized PID
-    "${mount_cmd[@]}"
-
-    # Rclone --daemon forks to background. We need to find its PID.
-    # Wait up to 20s for the mount to appear
-    local timeout=20
-    local mounted=false
-    for ((i=0; i<timeout; i++)); do
-        if mount | grep -q "on ${m_point} "; then
-            mounted=true
-            break
-        fi
-        sleep 1
-    done
-
-    if $mounted; then
-        # Find the PID of the rclone process handling this mount
-        local pid=$(pgrep -f "rclone mount ${r_name}: ${m_point}" | head -n 1)
-        if [ -n "$pid" ]; then
-            echo "$pid" > "$pid_file"
-            log OK "SUCCESS -- ${m_point}  |  PID: $pid  |  Remote: ${r_name}:"
-        else
-            log WARN "Mounted, but could not determine PID."
-        fi
-    else
-        log FAIL "${m_point} not visible after ${timeout}s. Check logs: $log_file"
-        exit 1
-    fi
+    # Replace the current shell process with rclone (foreground execution)
+    # This delegates full lifecycle management and PID tracking to the OS service manager
+    exec "${mount_cmd[@]}"
 }
 
-invoke_unmount() {
-    local r_name="$1"
-    log HEAD "Unmounting"
+install_services() {
+    log HEAD "Installing OS-Native Services"
+    local SCRIPT_PATH=$(realpath "$0")
 
-    local pids_found=false
-    for pid_file in "${CACHE_PATH}"/rclone_*.pid; do
-        [ -e "$pid_file" ] || continue
-        pids_found=true
-        local pid=$(cat "$pid_file")
-        local name=$(basename "$pid_file" | sed 's/^rclone_//;s/\.pid$//')
-
-        if [ "$r_name" != "*" ] && [ "$r_name" != "$name" ]; then
-            continue
-        fi
-
-        if kill -0 "$pid" 2>/dev/null; then
-            kill -15 "$pid"
-            log OK "Stopped '${name}' (PID $pid)."
-        else
-            log WARN "'${name}': no live rclone at PID $pid (already stopped?)."
-        fi
-        rm -f "$pid_file"
-    done
-
-    if ! $pids_found; then
-        log WARN "No PID files found. Using killall/fusermount fallback..."
-        pkill -x rclone || true
-    fi
-
-    # Explicitly unmount only the mountpoints defined in our config or CLI
-    # This avoids dangerously unmounting unrelated user fuse mounts.
     for i in "${!REMOTES[@]}"; do
-        local configured_remote="${REMOTES[$i]}"
+        local r_name="${REMOTES[$i]}"
         local m_point="${MOUNT_POINTS[$i]}"
 
-        if [ "$r_name" != "*" ] && [ "$r_name" != "$configured_remote" ]; then
-            continue
+        local CMD_ARGS=("-a" "daemon" "-r" "$r_name" "-m" "$m_point" "-c" "$CACHE_PATH")
+        if [ -n "$CONFIG_FILE" ]; then
+            CMD_ARGS+=("--config-file" "$(realpath "$CONFIG_FILE")")
         fi
 
-        unmount_path "$m_point"
-    done
-    sleep 2
-}
+        if [ "$OS" = "Darwin" ]; then
+            local PLIST_PATH="$HOME/Library/LaunchAgents/com.rclone.mount.${r_name}.plist"
+            mkdir -p "$HOME/Library/LaunchAgents"
 
-show_status() {
-    log HEAD "Mount Status"
-    local pids_found=false
-    for pid_file in "${CACHE_PATH}"/rclone_*.pid; do
-        [ -e "$pid_file" ] || continue
-        pids_found=true
-        local pid=$(cat "$pid_file")
-        local name=$(basename "$pid_file" | sed 's/^rclone_//;s/\.pid$//')
+            local args_xml="<string>$SCRIPT_PATH</string>"
+            for arg in "${CMD_ARGS[@]}"; do
+                arg=$(echo "$arg" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&#39;/g')
+                args_xml="$args_xml"$'\n'"        <string>$arg</string>"
+            done
 
-        if kill -0 "$pid" 2>/dev/null; then
-            local uptime="N/A"
-            if [ "$OS" = "Darwin" ]; then
-                uptime=$(ps -p "$pid" -o etime= | xargs)
-            else
-                uptime=$(ps -p "$pid" -o etimes= | awk '{printf "%dd %02dh %02dm\n", $1/86400, ($1%86400)/3600, ($1%3600)/60}')
-            fi
-            log OK "[${name}]  PID: $pid  |  Uptime: $uptime"
-        else
-            log WARN "[${name}]  PID $pid not found -- process may have crashed."
-        fi
-    done
-    if ! $pids_found; then
-        log WARN "No active mounts found."
-    fi
+            local keep_alive="<false/>"
+            if [ "$WATCHDOG" = true ]; then keep_alive="<true/>"; fi
 
-    log HEAD "Cache"
-    if [ -d "$CACHE_PATH" ]; then
-        local size=$(du -sh "$CACHE_PATH" | cut -f1)
-        log INFO "Path : $CACHE_PATH"
-        log INFO "Used : $size"
-    fi
-
-    log HEAD "Recent Logs"
-    for log_file in "${CACHE_PATH}"/mount_*.log; do
-        [ -e "$log_file" ] || continue
-        local name=$(basename "$log_file" | sed 's/^mount_//;s/\.log$//')
-        echo ""
-        echo -e "  \033[36m-- $name --\033[0m"
-        tail -n 10 "$log_file" | while read -r line; do
-            echo -e "    \033[90m$line\033[0m"
-        done
-    done
-}
-
-save_default_config() {
-    local path="$1"
-    cat <<EOF > "$path"
-{
-  "_comment": "Edit this file, then run: ./mount-gdrive.sh --config-file config.json",
-  "remotes": [
-    {
-      "name": "gdrive",
-      "mountPoint": "$DEFAULT_MOUNT",
-      "enabled": true
-    },
-    {
-      "name": "onedrive",
-      "mountPoint": "$HOME/onedrive",
-      "enabled": false
-    }
-  ],
-  "cachePath": "$CACHE_PATH",
-  "vfsCacheMode": "full",
-  "cacheMaxSize": "20G",
-  "bufferSize": "128M",
-  "driveChunkSize": "128M",
-  "bwLimit": "0",
-  "watchdog": false,
-  "watchdogIntervalMinutes": 2
-}
-EOF
-    log OK "Starter config written: $path"
-}
-
-install_service() {
-    log HEAD "Installing Auto-Start Services"
-    local SCRIPT_PATH=$(realpath "$0")
-    local -a CMD_ARGS=("-a" "mount")
-
-    if [ -n "$CONFIG_FILE" ]; then
-        CMD_ARGS+=("--config-file" "$(realpath "$CONFIG_FILE")")
-    else
-        CMD_ARGS+=("-r" "$REMOTE" "-m" "$MOUNT_POINT" "-c" "$CACHE_PATH")
-    fi
-
-    if [ "$OS" = "Darwin" ]; then
-        # macOS launchd
-        local PLIST_PATH="$HOME/Library/LaunchAgents/com.rclone.mount.plist"
-        mkdir -p "$HOME/Library/LaunchAgents"
-
-        local args_xml="<string>$SCRIPT_PATH</string>"
-        for arg in "${CMD_ARGS[@]}"; do
-            # Escape basic XML entities
-            arg=$(echo "$arg" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&#39;/g')
-            args_xml="$args_xml"$'\n'"        <string>$arg</string>"
-        done
-
-        cat <<EOF > "$PLIST_PATH"
+            cat <<EOF > "$PLIST_PATH"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.rclone.mount</string>
+    <string>com.rclone.mount.${r_name}</string>
     <key>ProgramArguments</key>
     <array>
         $args_xml
     </array>
     <key>RunAtLoad</key>
     <true/>
+    <key>KeepAlive</key>
+    $keep_alive
 </dict>
 </plist>
 EOF
-        if [ "$WATCHDOG" = true ]; then
-            local interval_sec=$(( WATCHDOG_INTERVAL * 60 ))
-            sed -i '' -e "/<\/dict>/i\\
-    <key>StartInterval</key>\\
-    <integer>$interval_sec</integer>\\
-" "$PLIST_PATH"
-        fi
+            launchctl unload "$PLIST_PATH" 2>/dev/null || true
+            launchctl load "$PLIST_PATH"
+            log OK "Installed launchd agent: $PLIST_PATH"
 
-        launchctl unload "$PLIST_PATH" 2>/dev/null || true
-        launchctl load "$PLIST_PATH"
-        log OK "Installed launchd agent at $PLIST_PATH"
+        else
+            local SERVICE_DIR="$HOME/.config/systemd/user"
+            mkdir -p "$SERVICE_DIR"
+            local SERVICE_PATH="$SERVICE_DIR/rclone-mount-${r_name}.service"
 
-    else
-        # Linux systemd user service
-        local SERVICE_DIR="$HOME/.config/systemd/user"
-        mkdir -p "$SERVICE_DIR"
-        local SERVICE_PATH="$SERVICE_DIR/rclone-mount.service"
+            local exec_start="$SCRIPT_PATH"
+            for arg in "${CMD_ARGS[@]}"; do
+                exec_start="$exec_start $(printf '%q' "$arg")"
+            done
 
-        # Build the command string properly escaping for systemd ExecStart
-        local exec_start="$SCRIPT_PATH"
-        for arg in "${CMD_ARGS[@]}"; do
-            # Systemd requires specific quoting; using printf %q provides safe shell quoting
-            exec_start="$exec_start $(printf '%q' "$arg")"
-        done
+            local restart="no"
+            if [ "$WATCHDOG" = true ]; then restart="always"; fi
 
-        cat <<EOF > "$SERVICE_PATH"
+            cat <<EOF > "$SERVICE_PATH"
 [Unit]
-Description=Rclone Mount Manager
+Description=Rclone Mount (${r_name})
 After=network-online.target
 
 [Service]
-Type=oneshot
+Type=simple
 ExecStart=$exec_start
-RemainAfterExit=no
-ExecStop=$SCRIPT_PATH -a unmount
+ExecStopPre=$SCRIPT_PATH -a unmount -r ${r_name}
+Restart=$restart
+RestartSec=10
 
 [Install]
 WantedBy=default.target
 EOF
 
-        systemctl --user daemon-reload
-        systemctl --user enable rclone-mount.service
-        systemctl --user start rclone-mount.service
-        log OK "Installed systemd user service at $SERVICE_PATH"
-
-        if [ "$WATCHDOG" = true ]; then
-            local TIMER_PATH="$SERVICE_DIR/rclone-mount.timer"
-            cat <<EOF > "$TIMER_PATH"
-[Unit]
-Description=Rclone Mount Watchdog Timer
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=${WATCHDOG_INTERVAL}min
-
-[Install]
-WantedBy=timers.target
-EOF
-            systemctl --user enable rclone-mount.timer
-            systemctl --user start rclone-mount.timer
-            log OK "Installed systemd user timer at $TIMER_PATH"
+            systemctl --user daemon-reload
+            systemctl --user enable "rclone-mount-${r_name}.service"
+            systemctl --user start "rclone-mount-${r_name}.service"
+            log OK "Installed systemd service: $SERVICE_PATH"
         fi
-    fi
+    done
 }
 
-uninstall_service() {
+uninstall_services() {
     log HEAD "Removing Services"
     if [ "$OS" = "Darwin" ]; then
-        local PLIST_PATH="$HOME/Library/LaunchAgents/com.rclone.mount.plist"
-        if [ -f "$PLIST_PATH" ]; then
-            launchctl unload "$PLIST_PATH" 2>/dev/null || true
-            rm -f "$PLIST_PATH"
-            log OK "Removed launchd agent."
-        fi
+        for plist in "$HOME/Library/LaunchAgents/com.rclone.mount."*.plist; do
+            [ -e "$plist" ] || continue
+            launchctl unload "$plist" 2>/dev/null || true
+            rm -f "$plist"
+            log OK "Removed $(basename "$plist")"
+        done
     else
-        systemctl --user stop rclone-mount.timer 2>/dev/null || true
-        systemctl --user disable rclone-mount.timer 2>/dev/null || true
-        systemctl --user stop rclone-mount.service 2>/dev/null || true
-        systemctl --user disable rclone-mount.service 2>/dev/null || true
-        rm -f "$HOME/.config/systemd/user/rclone-mount.service"
-        rm -f "$HOME/.config/systemd/user/rclone-mount.timer"
+        for srv in "$HOME/.config/systemd/user/rclone-mount-"*.service; do
+            [ -e "$srv" ] || continue
+            local srv_name=$(basename "$srv")
+            systemctl --user stop "$srv_name" 2>/dev/null || true
+            systemctl --user disable "$srv_name" 2>/dev/null || true
+            rm -f "$srv"
+            log OK "Removed $srv_name"
+        done
         systemctl --user daemon-reload
-        log OK "Removed systemd user services."
     fi
 }
 
-# Load config if specified
-if [ -n "$CONFIG_FILE" ]; then
-    if [ ! -f "$CONFIG_FILE" ]; then
-        log FAIL "Config file not found: $CONFIG_FILE"
-        exit 1
+show_status() {
+    log HEAD "OS-Native Service Status"
+    if [ "$OS" = "Darwin" ]; then
+        local found=false
+        for plist in "$HOME/Library/LaunchAgents/com.rclone.mount."*.plist; do
+            [ -e "$plist" ] || continue
+            found=true
+            local label=$(basename "$plist" .plist)
+            local pid=$(launchctl list | grep "$label" | awk '{print $1}')
+            if [[ "$pid" =~ ^[0-9]+$ ]]; then
+                local uptime=$(ps -p "$pid" -o etime= | xargs)
+                log OK "[$label]  PID: $pid  |  Uptime: $uptime"
+            else
+                log WARN "[$label] Not running or crashed."
+            fi
+        done
+        if ! $found; then log WARN "No launchd agents found."; fi
+    else
+        local found=false
+        for srv in "$HOME/.config/systemd/user/rclone-mount-"*.service; do
+            [ -e "$srv" ] || continue
+            found=true
+            local srv_name=$(basename "$srv")
+            local state=$(systemctl --user is-active "$srv_name" 2>/dev/null || echo "inactive")
+            if [ "$state" = "active" ]; then
+                local pid=$(systemctl --user show -p MainPID --value "$srv_name")
+                local uptime=$(ps -p "$pid" -o etimes= | awk '{printf "%dd %02dh %02dm\n", $1/86400, ($1%86400)/3600, ($1%3600)/60}')
+                log OK "[$srv_name]  PID: $pid  |  Uptime: $uptime"
+            else
+                log WARN "[$srv_name] State: $state"
+            fi
+        done
+        if ! $found; then log WARN "No systemd services found."; fi
     fi
-    eval "$(parse_config)"
-    log OK "Config loaded: $CONFIG_FILE"
-else
-    REMOTES=("$REMOTE")
-    MOUNT_POINTS=("$MOUNT_POINT")
-fi
 
+    log HEAD "Cache"
+    if [ -d "$CACHE_PATH" ]; then
+        log INFO "Path : $CACHE_PATH"
+        log INFO "Used : $(du -sh "$CACHE_PATH" | cut -f1)"
+    fi
+}
 
-# Dispatch
 case "$ACTION" in
+    install)
+        if [ -n "$CONFIG_FILE" ] && [ ! -f "$CONFIG_FILE" ]; then
+            mkdir -p "$(dirname "$CONFIG_FILE")"
+            cat <<EOF > "$CONFIG_FILE"
+{ "remotes": [ { "name": "gdrive", "mountPoint": "$DEFAULT_MOUNT", "enabled": true } ], "cachePath": "$CACHE_PATH", "vfsCacheMode": "full", "cacheMaxSize": "20G", "bufferSize": "128M", "driveChunkSize": "128M", "bwLimit": "0", "watchdog": true }
+EOF
+        elif [ -z "$CONFIG_FILE" ] && [ ! -f "$CACHE_PATH/config.json" ]; then
+            mkdir -p "$CACHE_PATH"
+            cat <<EOF > "$CACHE_PATH/config.json"
+{ "remotes": [ { "name": "gdrive", "mountPoint": "$DEFAULT_MOUNT", "enabled": true } ], "cachePath": "$CACHE_PATH", "vfsCacheMode": "full", "cacheMaxSize": "20G", "bufferSize": "128M", "driveChunkSize": "128M", "bwLimit": "0", "watchdog": true }
+EOF
+        fi
+
+        # Load config *after* we created it if needed
+        if [ -n "$CONFIG_FILE" ]; then eval "$(parse_config)"; else REMOTES=("$REMOTE"); MOUNT_POINTS=("$MOUNT_POINT"); fi
+
+        assert_prerequisites
+        install_services
+        ;;
+    uninstall)
+        uninstall_services
+        ;;
+    *)
+        # All other commands need the config loaded first
+        if [ -n "$CONFIG_FILE" ]; then
+            if [ ! -f "$CONFIG_FILE" ]; then log FAIL "Config file not found: $CONFIG_FILE"; exit 1; fi
+            eval "$(parse_config)"
+            log OK "Config loaded: $CONFIG_FILE"
+        else
+            REMOTES=("$REMOTE")
+            MOUNT_POINTS=("$MOUNT_POINT")
+        fi
+
+        case "$ACTION" in
+            daemon)
+        # INTERNAL: Run rclone in foreground. Managed by systemd/launchd.
+        assert_prerequisites
+        invoke_daemon "$REMOTE" "$MOUNT_POINT"
+        ;;
     mount)
         assert_prerequisites
-        clear_vfs_cache
+        # Backwards compatibility: manual mount fires off isolated background daemons using nohup
         for i in "${!REMOTES[@]}"; do
-            invoke_mount "${REMOTES[$i]}" "${MOUNT_POINTS[$i]}"
+            unmount_path "${MOUNT_POINTS[$i]}"
+            nohup "$0" -a daemon -r "${REMOTES[$i]}" -m "${MOUNT_POINTS[$i]}" -c "$CACHE_PATH" >/dev/null 2>&1 &
+            log OK "Launched background mount for ${REMOTES[$i]} -> ${MOUNT_POINTS[$i]}"
         done
-        if [ "$WATCHDOG" = true ]; then
-            install_service
-        fi
         ;;
     unmount)
-        invoke_unmount "*"
+        for i in "${!REMOTES[@]}"; do
+            if [ "$REMOTE" != "gdrive" ] && [ "$REMOTE" != "${REMOTES[$i]}" ] && [ -z "$CONFIG_FILE" ]; then continue; fi
+            # Stop any systemd service first so watchdog doesn't respawn it
+            if [ "$OS" = "Linux" ]; then systemctl --user stop "rclone-mount-${REMOTES[$i]}.service" 2>/dev/null || true; fi
+            # Kill the actual daemon process
+            pkill -f "rclone mount ${REMOTES[$i]}: ${MOUNT_POINTS[$i]}" || true
+            unmount_path "${MOUNT_POINTS[$i]}"
+        done
         ;;
     status)
         show_status
         ;;
     restart)
-        invoke_unmount "*"
-        assert_prerequisites
-        for i in "${!REMOTES[@]}"; do
-            invoke_mount "${REMOTES[$i]}" "${MOUNT_POINTS[$i]}"
-        done
-        ;;
-    install)
-        if [ -n "$CONFIG_FILE" ] && [ ! -f "$CONFIG_FILE" ]; then
-            mkdir -p "$(dirname "$CONFIG_FILE")"
-            save_default_config "$CONFIG_FILE"
-        elif [ -z "$CONFIG_FILE" ] && [ ! -f "$CACHE_PATH/config.json" ]; then
-            mkdir -p "$CACHE_PATH"
-            save_default_config "$CACHE_PATH/config.json"
-        fi
-        install_service
-        ;;
-    uninstall)
-        uninstall_service
-        ;;
-    *)
-        log FAIL "Unknown action: $ACTION"
-        exit 1
+        "$0" -a unmount
+        sleep 2
+        "$0" -a mount
+                ;;
+            *)
+                log FAIL "Unknown action: $ACTION"
+                exit 1
+                ;;
+        esac
         ;;
 esac

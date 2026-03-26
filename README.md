@@ -10,7 +10,7 @@ This suite is designed for power users who require absolute stability, zero-I/O 
 
 - **Cross-Platform**: Run the PowerShell/NSIS suite on Windows, or the unified Bash script on macOS/Linux. 100% feature parity.
 - **Multi-Remote JSON Configuration**: Mount an arbitrary number of remotes (`gdrive`, `onedrive`, `s3`, etc.) using a single config file.
-- **Auto-Start & Crash Watchdog**: Automatically mount your drives at system boot/logon. A background watchdog service checks for `rclone` crashes and auto-remounts seamlessly.
+- **Auto-Start & OS-Native Crash Watchdog**: Automatically mount your drives at system boot/logon. On Linux and macOS, the daemon is fully delegated to the native OS kernel/init system (`systemd` with `Restart=always` / `launchd` with `KeepAlive=true`), guaranteeing 100% reliable auto-remounts if `rclone` ever crashes. Windows utilizes a reliable Task Scheduler periodic loop.
 - **Status Dashboard**: A unified CLI command (`-Action Status`) provides a beautiful overview of all active mounts, PIDs, uptimes, RAM/disk cache usage, and recent log tailing.
 - **Aggressive VFS Caching**: Zero-I/O latency. Uses `vfs-cache-mode full` for in-place editing, rapid seek, media playback buffering, and offline writes.
 - **Anomaly Clearance & State Reset**: Automatically cleans up stale PID files, forcefully kills hanging `rclone` daemon threads, and clears old VFS cache chunks to prevent disk bloat.
