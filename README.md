@@ -102,6 +102,14 @@ You can register the script to run automatically in the background using native 
 
 ---
 
+## 🛠️ Troubleshooting
+
+- **macOS macFUSE Kext Errors**: Newer versions of macOS strongly restrict kernel extensions. If the script hangs or rclone fails to mount, go to `System Settings` > `Privacy & Security` > `Security` and click "Allow" for "macFUSE". You may need to reboot into Recovery Mode and lower the security policy to "Reduced Security" for kernel extensions to load.
+- **Linux systemd user services**: The auto-start services on Linux run under `systemctl --user`. If your mounts don't start at boot until you log in, you must enable lingering for your user account: `sudo loginctl enable-linger $USER`.
+- **Cache Drive Full**: The script enforces a strict 5GB minimum free space check to prevent `rclone` from writing a bad cache loop that soft-bricks your OS drive. You can increase or decrease this limit in the script directly (`assert_disk_space`).
+
+---
+
 ## ⚙️ Multi-Remote JSON Configuration
 
 For power users with multiple cloud drives, you can use a single `config.json` file to dictate all mounting behavior.

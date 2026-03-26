@@ -88,7 +88,7 @@ log() {
 
 # Python script to parse JSON config safely using bash arrays and avoiding eval injection
 parse_config() {
-    python3 -c '
+    cat << 'EOF' | python3 - "$CONFIG_FILE" "$CACHE_PATH"
 import json, sys, shlex
 try:
     with open(sys.argv[1]) as f:
@@ -96,17 +96,17 @@ try:
     if "remotes" not in data:
         sys.exit(0)
 
-    print(f"CACHE_PATH={shlex.quote(data.get(\"cachePath\", sys.argv[2]))}")
-    print(f"VFS_CACHE_MODE={shlex.quote(data.get(\"vfsCacheMode\", \"full\"))}")
-    print(f"CACHE_MAX_SIZE={shlex.quote(data.get(\"cacheMaxSize\", \"20G\"))}")
-    print(f"BUFFER_SIZE={shlex.quote(data.get(\"bufferSize\", \"128M\"))}")
-    print(f"DRIVE_CHUNK_SIZE={shlex.quote(data.get(\"driveChunkSize\", \"128M\"))}")
-    print(f"BW_LIMIT={shlex.quote(data.get(\"bwLimit\", \"0\"))}")
+    print(f"CACHE_PATH={shlex.quote(data.get('cachePath', sys.argv[2]))}")
+    print(f"VFS_CACHE_MODE={shlex.quote(data.get('vfsCacheMode', 'full'))}")
+    print(f"CACHE_MAX_SIZE={shlex.quote(data.get('cacheMaxSize', '20G'))}")
+    print(f"BUFFER_SIZE={shlex.quote(data.get('bufferSize', '128M'))}")
+    print(f"DRIVE_CHUNK_SIZE={shlex.quote(data.get('driveChunkSize', '128M'))}")
+    print(f"BW_LIMIT={shlex.quote(data.get('bwLimit', '0'))}")
 
     if data.get("watchdog"):
         print("WATCHDOG=true")
     if data.get("watchdogIntervalMinutes"):
-        print(f"WATCHDOG_INTERVAL={shlex.quote(str(data.get(\"watchdogIntervalMinutes\")))}")
+        print(f"WATCHDOG_INTERVAL={shlex.quote(str(data.get('watchdogIntervalMinutes')))}")
 
     print("REMOTES=()")
     print("MOUNT_POINTS=()")
@@ -121,7 +121,7 @@ try:
 except Exception as e:
     print(f"echo Error parsing JSON: {e} >&2", file=sys.stderr)
     sys.exit(1)
-' "$CONFIG_FILE" "$CACHE_PATH"
+EOF
 }
 
 # Check if command exists
