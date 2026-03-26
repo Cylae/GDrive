@@ -518,36 +518,36 @@ EOF
 
         case "$ACTION" in
             daemon)
-        # INTERNAL: Run rclone in foreground. Managed by systemd/launchd.
-        assert_prerequisites
-        invoke_daemon "$REMOTE" "$MOUNT_POINT"
-        ;;
-    mount)
-        assert_prerequisites
-        # Backwards compatibility: manual mount fires off isolated background daemons using nohup
-        for i in "${!REMOTES[@]}"; do
-            unmount_path "${MOUNT_POINTS[$i]}"
-            nohup "$0" -a daemon -r "${REMOTES[$i]}" -m "${MOUNT_POINTS[$i]}" -c "$CACHE_PATH" >/dev/null 2>&1 &
-            log OK "Launched background mount for ${REMOTES[$i]} -> ${MOUNT_POINTS[$i]}"
-        done
-        ;;
-    unmount)
-        for i in "${!REMOTES[@]}"; do
-            if [ "$REMOTE" != "gdrive" ] && [ "$REMOTE" != "${REMOTES[$i]}" ] && [ -z "$CONFIG_FILE" ]; then continue; fi
-            # Stop any systemd service first so watchdog doesn't respawn it
-            if [ "$OS" = "Linux" ]; then systemctl --user stop "rclone-mount-${REMOTES[$i]}.service" 2>/dev/null || true; fi
-            # Kill the actual daemon process
-            pkill -f "rclone mount ${REMOTES[$i]}: ${MOUNT_POINTS[$i]}" || true
-            unmount_path "${MOUNT_POINTS[$i]}"
-        done
-        ;;
-    status)
-        show_status
-        ;;
-    restart)
-        "$0" -a unmount
-        sleep 2
-        "$0" -a mount
+                # INTERNAL: Run rclone in foreground. Managed by systemd/launchd.
+                assert_prerequisites
+                invoke_daemon "$REMOTE" "$MOUNT_POINT"
+                ;;
+            mount)
+                assert_prerequisites
+                # Backwards compatibility: manual mount fires off isolated background daemons using nohup
+                for i in "${!REMOTES[@]}"; do
+                    unmount_path "${MOUNT_POINTS[$i]}"
+                    nohup "$0" -a daemon -r "${REMOTES[$i]}" -m "${MOUNT_POINTS[$i]}" -c "$CACHE_PATH" >/dev/null 2>&1 &
+                    log OK "Launched background mount for ${REMOTES[$i]} -> ${MOUNT_POINTS[$i]}"
+                done
+                ;;
+            unmount)
+                for i in "${!REMOTES[@]}"; do
+                    if [ "$REMOTE" != "gdrive" ] && [ "$REMOTE" != "${REMOTES[$i]}" ] && [ -z "$CONFIG_FILE" ]; then continue; fi
+                    # Stop any systemd service first so watchdog doesn't respawn it
+                    if [ "$OS" = "Linux" ]; then systemctl --user stop "rclone-mount-${REMOTES[$i]}.service" 2>/dev/null || true; fi
+                    # Kill the actual daemon process
+                    pkill -f "rclone mount ${REMOTES[$i]}: ${MOUNT_POINTS[$i]}" || true
+                    unmount_path "${MOUNT_POINTS[$i]}"
+                done
+                ;;
+            status)
+                show_status
+                ;;
+            restart)
+                "$0" -a unmount
+                sleep 2
+                "$0" -a mount
                 ;;
             *)
                 log FAIL "Unknown action: $ACTION"

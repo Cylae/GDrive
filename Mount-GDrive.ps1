@@ -289,11 +289,13 @@ function Assert-DiskSpace {
 
     $letter = (Split-Path -Qualifier $Path).TrimEnd(':')
     $drive  = Get-PSDrive -Name $letter -ErrorAction SilentlyContinue
-    $freeGB = if ($drive) {
+    $freeGB = if ($drive -and $drive.Free) {
         [math]::Round($drive.Free / 1GB, 1)
-    } else {
+    } elseif ($IsWindows) {
         $cim = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='${letter}:'" -ErrorAction SilentlyContinue
-        if ($cim) { [math]::Round($cim.FreeSpace / 1GB, 1) } else { 999 }
+        if ($cim -and $cim.FreeSpace) { [math]::Round($cim.FreeSpace / 1GB, 1) } else { 999 }
+    } else {
+        999
     }
 
     if ($freeGB -lt $RequiredGB) {
@@ -315,10 +317,12 @@ function Assert-MountPointFree {
         Write-Log "FAIL" "$Letter is already in use. Choose another letter with -MountPoint."
         exit 1
     }
-    $cim = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$Letter'" -ErrorAction SilentlyContinue
-    if ($cim) {
-        Write-Log "FAIL" "$Letter is occupied (CIM DriveType: $($cim.DriveType)). Choose another letter."
-        exit 1
+    if ($IsWindows) {
+        $cim = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$Letter'" -ErrorAction SilentlyContinue
+        if ($cim) {
+            Write-Log "FAIL" "$Letter is occupied (CIM DriveType: $($cim.DriveType)). Choose another letter."
+            exit 1
+        }
     }
     Write-Log "OK" "$Letter is free."
 }
@@ -569,9 +573,14 @@ function Show-Status {
             $rName    = $pf.BaseName -replace "^rclone_", ""
             $proc     = Get-Process -Id $savedPid -ErrorAction SilentlyContinue
 
-            if ($proc -and $proc.Name -eq "rclone") {
-                $up    = (Get-Date) - $proc.StartTime
-                $upStr = "{0}d {1:D2}h {2:D2}m" -f $up.Days, $up.Hours, $up.Minutes
+            if ($proc) {
+                # StartTime can throw on some Unix platforms or for system processes, adding try/catch or simple check
+                try {
+                    $up = (Get-Date) - $proc.StartTime
+                    $upStr = "{0}d {1:D2}h {2:D2}m" -f $up.Days, $up.Hours, $up.Minutes
+                } catch {
+                    $upStr = "Unknown"
+                }
                 $ramMB = [math]::Round($proc.WorkingSet64 / 1MB, 1)
                 Write-Log "OK" "[${rName}]  PID: $savedPid  |  Uptime: $upStr  |  RAM: ${ramMB}MB"
             } else {
@@ -589,11 +598,13 @@ function Show-Status {
         Write-Log "INFO" "Used : ${usedMB}MB"
     }
 
-    Write-Log "HEAD" "Scheduled Tasks"
-    foreach ($tn in @($TASK_MOUNT, $TASK_WATCHDOG)) {
-        $t = Get-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
-        if ($t) { Write-Log "OK"   "$tn  ->  $($t.State)" }
-        else    { Write-Log "INFO" "$tn  ->  not registered" }
+    if ($IsWindows) {
+        Write-Log "HEAD" "Scheduled Tasks"
+        foreach ($tn in @($TASK_MOUNT, $TASK_WATCHDOG)) {
+            $t = Get-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
+            if ($t) { Write-Log "OK"   "$tn  ->  $($t.State)" }
+            else    { Write-Log "INFO" "$tn  ->  not registered" }
+        }
     }
 
     Write-Log "HEAD" "Recent Logs"
@@ -673,6 +684,7 @@ function Install-ScheduledTasks {
 }
 
 function Uninstall-ScheduledTasks {
+    if (-not $IsWindows) { return }
     Write-Log "HEAD" "Removing Scheduled Tasks"
     foreach ($tn in @($TASK_MOUNT, $TASK_WATCHDOG)) {
         if (Get-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue) {
