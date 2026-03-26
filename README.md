@@ -24,9 +24,21 @@ These scripts configure `rclone` mounts with highly optimized flags designed for
 
 ---
 
-## 📦 Zero-Touch Prerequisites (Auto-Install)
+## ✨ 1-Click Installation (Recommended)
 
-The suite is designed for a **100% zero-touch deployment**. If any underlying dependencies (`rclone`, `WinFsp`, `macFUSE`, `fuse3`, or `python3`) are missing, the scripts will automatically fetch and install the latest versions directly from the official sources before continuing.
+Getting started is fully automated and flawless. Just run the installer designed for your OS. If you are missing any dependencies (e.g., `rclone`, `WinFsp`, `macFUSE`, `fuse3`, or `python3`), the installer will automatically download, install, and configure the latest versions directly from official sources in the background.
+
+- **Windows**: Right-click `Install-Windows.bat` and select **Run as Administrator** (or double-click and approve the UAC prompt). It handles `winget` dependencies, configures your Task Scheduler, and mounts the drive to `X:` immediately.
+- **macOS**: Double-click `Install-macOS.command` inside Finder. It automatically installs Homebrew (if needed), `macFUSE`, and configures the `launchd` auto-start service.
+- **Linux**: Run `./Install-Linux.sh` in your terminal. It leverages your native package manager (APT/DNF/Pacman) and configures your `systemd` user service.
+
+*That's it. Your cloud storage is now natively mounted and will survive reboots.*
+
+---
+
+## 📦 Zero-Touch Architecture (Auto-Install)
+
+The suite is designed for a **100% zero-touch deployment**. If any underlying dependencies are missing, the scripts fetch them automatically during the "Install" action.
 
 **Auto-Installation Mechanisms:**
 - **Windows**: Automatically utilizes `winget` to pull `Rclone.Rclone` and `WinFsp.WinFsp`.
@@ -54,18 +66,17 @@ make
 
 ## 🖥️ Windows Usage
 
-### The NSIS Installer `.exe` (Recommended)
+### Compiling the NSIS Installer `.exe` (Optional)
 
-To compile the `installer.nsi` script into an executable, you need [NSIS](https://nsis.sourceforge.io/Download).
-*(Note: Windows 11 ARM64 users can compile and run the generated x86 installer as Windows emulates it natively).*
+If you prefer deploying a single file, you can compile the `installer.nsi` script into a standalone executable (requires [NSIS](https://nsis.sourceforge.io/Download)).
 
-Once compiled, simply double-click `Rclone-Optimized.exe`. It will silently install the PowerShell scripts into `%LOCALAPPDATA%\RcloneMountManager`, place a `Run-Rclone.bat` shortcut on your Desktop, and immediately mount your default `gdrive` to `X:`.
+Once compiled, simply distribute and double-click `Rclone-Optimized.exe`. It acts just like `Install-Windows.bat`, but silently installs the PowerShell scripts into `%LOCALAPPDATA%\RcloneMountManager`, places a `Run-Rclone.bat` shortcut on your Desktop, and mounts your `gdrive` immediately.
 
 **Network Drive Discovery:** The rclone mount acts as a true Windows Network Location and will immediately appear under "This PC". You can also map it to any letter or browse to it via "Add Network Location" if desired.
 
-### Manual PowerShell Usage
+### Advanced PowerShell Usage
 
-Open an elevated PowerShell prompt to access advanced features:
+Open an elevated PowerShell prompt to access advanced features directly:
 
 ```powershell
 # Default mount of 'gdrive' on X:
@@ -90,10 +101,10 @@ Ensure the script is executable before running:
 chmod +x mount-gdrive.sh
 ```
 
-### Basic Commands
+### Advanced CLI Commands
 
 ```bash
-# Mount the default 'gdrive' remote to ~/gdrive (macOS) or /mnt/gdrive (Linux)
+# Force a manual mount in the current session
 ./mount-gdrive.sh -a mount
 
 # Mount a specific remote with a bandwidth limit

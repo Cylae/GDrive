@@ -787,6 +787,8 @@ switch ($Action) {
     }
 
     "Install" {
+        Assert-Prerequisites
+
         if (-not (Test-Path $CachePath)) {
             New-Item -ItemType Directory -Force -Path $CachePath | Out-Null
         }
@@ -794,7 +796,11 @@ switch ($Action) {
         if (-not $ConfigFile -and -not (Test-Path $defaultCfg)) {
             Save-DefaultConfig -Path $defaultCfg
         }
+
         Install-ScheduledTasks -WithWatchdog:$Watchdog -WdMinutes $WatchdogInterval
+
+        Write-Log "INFO" "Starting the newly installed background mount task..."
+        Start-ScheduledTask -TaskName $TASK_MOUNT -ErrorAction SilentlyContinue
     }
 
     "Uninstall" {
