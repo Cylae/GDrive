@@ -55,6 +55,8 @@ To compile the `installer.nsi` script into an executable, you need [NSIS](https:
 
 Once compiled, simply double-click `Rclone-Optimized.exe`. It will silently install the PowerShell scripts into `%LOCALAPPDATA%\RcloneMountManager`, place a `Run-Rclone.bat` shortcut on your Desktop, and immediately mount your default `gdrive` to `X:`.
 
+**Network Drive Discovery:** The rclone mount acts as a true Windows Network Location. You can map it to any letter or browse to it via "Add Network Location" by using the UNC path: `\\rclone\gdrive` (or whatever your remote is named).
+
 ### Manual PowerShell Usage
 
 Open an elevated PowerShell prompt to access advanced features:
