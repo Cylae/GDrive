@@ -805,15 +805,37 @@ switch ($Action) {
             Write-Log "FAIL" "No remotes configured in rclone! Please run setup again and create a remote."
             exit 1
         }
-        $available = ($remotesRaw | ForEach-Object { $_ -replace ":","" }) -join ", "
+        $remoteNames = @($remotesRaw | ForEach-Object { $_ -replace ":","" })
+        $available = $remoteNames -join ", "
         Write-Host "  Available remotes: " -NoNewline; Write-Host $available -ForegroundColor Green
 
-        $userRemote = Read-Host "  Which remote would you like to auto-mount? [Default: gdrive]"
-        if ([string]::IsNullOrWhiteSpace($userRemote)) { $userRemote = "gdrive" }
+        $defaultRemote = if ($remoteNames.Contains("gdrive")) { "gdrive" } else { $remoteNames[0] }
 
-        $userMount = Read-Host "  Which drive letter should it map to? [Default: X:]"
-        if ([string]::IsNullOrWhiteSpace($userMount)) { $userMount = "X:" }
-        if (-not $userMount.EndsWith(":")) { $userMount += ":" }
+        $userRemote = ""
+        while ($true) {
+            $userRemote = Read-Host "  Which remote would you like to auto-mount? [Default: $defaultRemote]"
+            if ([string]::IsNullOrWhiteSpace($userRemote)) { $userRemote = $defaultRemote }
+            if ($remoteNames -contains $userRemote) { break }
+            Write-Log "WARN" "Invalid remote '$userRemote'. Please choose from: $available"
+        }
+
+        $userMount = ""
+        while ($true) {
+            $userMount = Read-Host "  Which drive letter should it map to? [Default: X:]"
+            if ([string]::IsNullOrWhiteSpace($userMount)) { $userMount = "X:" }
+            $userMount = $userMount.Trim().ToUpper()
+            if ($userMount.Length -eq 1 -and $userMount -match "^[A-Z]$") { $userMount += ":" }
+
+            if ($userMount -match "^[A-Z]:$") {
+                if (Test-Path "$userMount\") {
+                    Write-Log "WARN" "Drive $userMount is already in use. Please choose an available letter."
+                } else {
+                    break
+                }
+            } else {
+                Write-Log "WARN" "Invalid format. Enter a single letter (e.g., Z: or M)."
+            }
+        }
 
         if (-not (Test-Path $CachePath)) {
             New-Item -ItemType Directory -Force -Path $CachePath | Out-Null

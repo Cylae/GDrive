@@ -411,13 +411,43 @@ case "$ACTION" in
 
         echo -e "  Available remotes: \033[32m$available_remotes\033[0m"
 
-        read -p "  Which remote would you like to auto-mount? [Default: gdrive]: " user_remote
-        user_remote=${user_remote:-gdrive}
+        default_remote=""
+        if echo "$available_remotes" | grep -qw "gdrive"; then default_remote="gdrive"; else default_remote=$(echo "$available_remotes" | awk '{print $1}'); fi
 
-        read -p "  Where should it be mounted? [Default: $DEFAULT_MOUNT]: " user_mount
-        user_mount=${user_mount:-$DEFAULT_MOUNT}
+        while true; do
+            read -p "  Which remote would you like to auto-mount? [Default: $default_remote]: " user_remote
+            user_remote=${user_remote:-$default_remote}
+            if echo "$available_remotes" | grep -qw "$user_remote"; then break; fi
+            log WARN "Invalid remote '$user_remote'. Please choose from: $available_remotes"
+        done
 
-        local cfg_path="$CACHE_PATH/config.json"
+        while true; do
+            read -p "  Where should it be mounted? [Default: $DEFAULT_MOUNT]: " user_mount
+            user_mount=${user_mount:-$DEFAULT_MOUNT}
+
+            # Expand ~ to $HOME
+            user_mount="${user_mount/#\~/$HOME}"
+
+            # Enforce absolute path
+            if [[ "$user_mount" != /* ]]; then
+                log WARN "Mount path must be absolute (start with / or ~)."
+                continue
+            fi
+
+            if [ -d "$user_mount" ]; then
+                if [ "$(ls -A "$user_mount" 2>/dev/null)" ]; then
+                    if mount | grep -q "on ${user_mount} "; then
+                        log WARN "Directory is currently mounted by another process."
+                        continue
+                    fi
+                    read -p "  Warning: Directory '$user_mount' is not empty. Mount over it anyway? [y/N]: " force_mount
+                    if [[ ! "$force_mount" =~ ^[Yy]$ ]]; then continue; fi
+                fi
+            fi
+            break
+        done
+
+        cfg_path="$CACHE_PATH/config.json"
         if [ -n "$CONFIG_FILE" ]; then cfg_path="$CONFIG_FILE"; fi
 
         mkdir -p "$(dirname "$cfg_path")"
