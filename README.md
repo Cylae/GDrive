@@ -36,6 +36,21 @@ This suite is designed for power users who require absolute stability, zero-I/O 
 
 ---
 
+## ⚙️ Compiling Assembly Launchers (Optional)
+
+For absolute minimal footprint and speed, this project includes lightweight Assembly language wrappers for both Windows and Linux. These wrappers act as silent executors for the underlying scripts and compile to tiny binaries (~1-3KB).
+
+You can compile them on any machine with `nasm` and `mingw-w64` installed:
+
+```bash
+make
+```
+
+- **Linux**: Produces `RcloneMount-Linux`. This is a lightweight x86_64 ELF binary that safely forwards CLI arguments directly to `mount-gdrive.sh` via the `execve` syscall.
+- **Windows**: Produces `RcloneMount-Windows.exe`. This is a lightweight x86 PE32 binary that silently invokes `Mount-GDrive.ps1` in the background via the Windows API `WinExec`.
+
+---
+
 ## 🖥️ Windows Usage
 
 ### The NSIS Installer `.exe` (Recommended)
