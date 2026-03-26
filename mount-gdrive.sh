@@ -388,22 +388,62 @@ show_status() {
 
 case "$ACTION" in
     install)
-        if [ -n "$CONFIG_FILE" ] && [ ! -f "$CONFIG_FILE" ]; then
-            mkdir -p "$(dirname "$CONFIG_FILE")"
-            cat <<EOF > "$CONFIG_FILE"
-{ "remotes": [ { "name": "gdrive", "mountPoint": "$DEFAULT_MOUNT", "enabled": true } ], "cachePath": "$CACHE_PATH", "vfsCacheMode": "full", "cacheMaxSize": "20G", "bufferSize": "128M", "driveChunkSize": "128M", "bwLimit": "0", "watchdog": true }
-EOF
-        elif [ -z "$CONFIG_FILE" ] && [ ! -f "$CACHE_PATH/config.json" ]; then
-            mkdir -p "$CACHE_PATH"
-            cat <<EOF > "$CACHE_PATH/config.json"
-{ "remotes": [ { "name": "gdrive", "mountPoint": "$DEFAULT_MOUNT", "enabled": true } ], "cachePath": "$CACHE_PATH", "vfsCacheMode": "full", "cacheMaxSize": "20G", "bufferSize": "128M", "driveChunkSize": "128M", "bwLimit": "0", "watchdog": true }
-EOF
+        assert_prerequisites
+
+        log HEAD "Cloud Provider Configuration"
+        echo -e "  \033[36mWelcome to the Universal Rclone Mount Manager Setup.\033[0m"
+        echo -e "  You can mount Google Drive, OneDrive, Amazon S3, Dropbox, and 40+ more providers."
+        echo ""
+        read -p "  Do you need to configure a NEW cloud remote now? [y/N]: " setup_new
+        if [[ "$setup_new" =~ ^[Yy]$ ]]; then
+            rclone config
         fi
 
-        # Load config *after* we created it if needed
-        if [ -n "$CONFIG_FILE" ]; then eval "$(parse_config)"; else REMOTES=("$REMOTE"); MOUNT_POINTS=("$MOUNT_POINT"); fi
+        echo ""
+        log HEAD "Mount Configuration"
 
-        assert_prerequisites
+        # Determine available remotes
+        available_remotes=$(rclone listremotes | sed 's/://g' | xargs)
+        if [ -z "$available_remotes" ]; then
+            log FAIL "No remotes configured in rclone! Please run setup again and create a remote."
+            exit 1
+        fi
+
+        echo -e "  Available remotes: \033[32m$available_remotes\033[0m"
+
+        read -p "  Which remote would you like to auto-mount? [Default: gdrive]: " user_remote
+        user_remote=${user_remote:-gdrive}
+
+        read -p "  Where should it be mounted? [Default: $DEFAULT_MOUNT]: " user_mount
+        user_mount=${user_mount:-$DEFAULT_MOUNT}
+
+        local cfg_path="$CACHE_PATH/config.json"
+        if [ -n "$CONFIG_FILE" ]; then cfg_path="$CONFIG_FILE"; fi
+
+        mkdir -p "$(dirname "$cfg_path")"
+        cat <<EOF > "$cfg_path"
+{
+  "remotes": [
+    {
+      "name": "$user_remote",
+      "mountPoint": "$user_mount",
+      "enabled": true
+    }
+  ],
+  "cachePath": "$CACHE_PATH",
+  "vfsCacheMode": "full",
+  "cacheMaxSize": "20G",
+  "bufferSize": "128M",
+  "driveChunkSize": "128M",
+  "bwLimit": "0",
+  "watchdog": true
+}
+EOF
+        log OK "Configuration saved to: $cfg_path"
+
+        CONFIG_FILE="$cfg_path"
+        eval "$(parse_config)"
+
         install_services
         ;;
     uninstall)

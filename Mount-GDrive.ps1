@@ -789,15 +789,57 @@ switch ($Action) {
     "Install" {
         Assert-Prerequisites
 
+        Write-Log "HEAD" "Cloud Provider Configuration"
+        Write-Host "  Welcome to the Universal Rclone Mount Manager Setup." -ForegroundColor Cyan
+        Write-Host "  You can mount Google Drive, OneDrive, Amazon S3, Dropbox, and 40+ more providers."
+        Write-Host ""
+
+        $setupNew = Read-Host "  Do you need to configure a NEW cloud remote now? [y/N]"
+        if ($setupNew -match "^[Yy]") {
+            Start-Process rclone -ArgumentList "config" -Wait -NoNewWindow
+        }
+
+        Write-Log "HEAD" "Mount Configuration"
+        $remotesRaw = & rclone listremotes 2>&1
+        if (-not $remotesRaw) {
+            Write-Log "FAIL" "No remotes configured in rclone! Please run setup again and create a remote."
+            exit 1
+        }
+        $available = ($remotesRaw | ForEach-Object { $_ -replace ":","" }) -join ", "
+        Write-Host "  Available remotes: " -NoNewline; Write-Host $available -ForegroundColor Green
+
+        $userRemote = Read-Host "  Which remote would you like to auto-mount? [Default: gdrive]"
+        if ([string]::IsNullOrWhiteSpace($userRemote)) { $userRemote = "gdrive" }
+
+        $userMount = Read-Host "  Which drive letter should it map to? [Default: X:]"
+        if ([string]::IsNullOrWhiteSpace($userMount)) { $userMount = "X:" }
+        if (-not $userMount.EndsWith(":")) { $userMount += ":" }
+
         if (-not (Test-Path $CachePath)) {
             New-Item -ItemType Directory -Force -Path $CachePath | Out-Null
         }
-        $defaultCfg = Join-Path $CachePath "config.json"
-        if (-not $ConfigFile -and -not (Test-Path $defaultCfg)) {
-            Save-DefaultConfig -Path $defaultCfg
-        }
+        $cfgPath = Join-Path $CachePath "config.json"
+        if ($ConfigFile) { $cfgPath = $ConfigFile }
 
-        Install-ScheduledTasks -WithWatchdog:$Watchdog -WdMinutes $WatchdogInterval
+        $template = [ordered]@{
+            remotes      = @(
+                [ordered]@{ name = $userRemote; mountPoint = $userMount; enabled = $true  }
+            )
+            cachePath               = $CachePath
+            vfsCacheMode            = "full"
+            cacheMaxSize            = "20G"
+            bufferSize              = "128M"
+            driveChunkSize          = "128M"
+            bwLimit                 = "0"
+            watchdog                = $true
+            watchdogIntervalMinutes = 2
+        }
+        $template | ConvertTo-Json -Depth 5 | Set-Content -Path $cfgPath -Encoding UTF8
+        Write-Log "OK" "Configuration saved to: $cfgPath"
+
+        $ConfigFile = $cfgPath
+
+        Install-ScheduledTasks -WithWatchdog:$true -WdMinutes 2
 
         Write-Log "INFO" "Starting the newly installed background mount task..."
         Start-ScheduledTask -TaskName $TASK_MOUNT -ErrorAction SilentlyContinue
