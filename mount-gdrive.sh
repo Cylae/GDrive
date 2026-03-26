@@ -17,6 +17,7 @@ CACHE_MAX_SIZE="20G"
 CONFIG_FILE=""
 WATCHDOG=false
 WATCHDOG_INTERVAL=2
+LOG_MAX_BYTES=5242880 # 5MB
 
 # Determine OS
 OS=$(uname -s)
@@ -42,7 +43,7 @@ Options:
   --drive-chunk-size SIZE  Upload chunk size (default: 128M)
   --bw-limit LIMIT         Bandwidth cap, e.g. 10M (default: 0)
   --cache-max-size SIZE    Max VFS disk cache size (default: 20G)
-  --config-file PATH       JSON config file path
+  --config-file PATH       JSON config file path (overrides CLI flags)
   --watchdog               Install a watchdog to auto-remount
   --watchdog-interval MIN  Minutes between watchdog checks (default: 2)
   -h, --help               Show this help
@@ -85,9 +86,52 @@ log() {
     echo -e "  [${ts}] [${level}] ${color}$* \033[0m"
 }
 
+# Python script to parse JSON config safely using bash arrays and avoiding eval injection
+parse_config() {
+    python3 -c '
+import json, sys, shlex
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+    if "remotes" not in data:
+        sys.exit(0)
+
+    print(f"CACHE_PATH={shlex.quote(data.get(\"cachePath\", sys.argv[2]))}")
+    print(f"VFS_CACHE_MODE={shlex.quote(data.get(\"vfsCacheMode\", \"full\"))}")
+    print(f"CACHE_MAX_SIZE={shlex.quote(data.get(\"cacheMaxSize\", \"20G\"))}")
+    print(f"BUFFER_SIZE={shlex.quote(data.get(\"bufferSize\", \"128M\"))}")
+    print(f"DRIVE_CHUNK_SIZE={shlex.quote(data.get(\"driveChunkSize\", \"128M\"))}")
+    print(f"BW_LIMIT={shlex.quote(data.get(\"bwLimit\", \"0\"))}")
+
+    if data.get("watchdog"):
+        print("WATCHDOG=true")
+    if data.get("watchdogIntervalMinutes"):
+        print(f"WATCHDOG_INTERVAL={shlex.quote(str(data.get(\"watchdogIntervalMinutes\")))}")
+
+    print("REMOTES=()")
+    print("MOUNT_POINTS=()")
+
+    for r in data["remotes"]:
+        if r.get("enabled", True):
+            name = shlex.quote(r.get("name", ""))
+            mp = shlex.quote(r.get("mountPoint", ""))
+            print(f"REMOTES+=({name})")
+            print(f"MOUNT_POINTS+=({mp})")
+
+except Exception as e:
+    print(f"echo Error parsing JSON: {e} >&2", file=sys.stderr)
+    sys.exit(1)
+' "$CONFIG_FILE" "$CACHE_PATH"
+}
+
+# Check if command exists
+has_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
 assert_prerequisites() {
     log HEAD "Prerequisites"
-    if ! command -v rclone &> /dev/null; then
+    if ! has_cmd rclone; then
         log FAIL "rclone not found in PATH."
         if [ "$OS" = "Darwin" ]; then
             log FAIL "  Install via Homebrew: brew install rclone"
@@ -100,14 +144,21 @@ assert_prerequisites() {
     log OK "rclone -- $v"
 
     if [ "$OS" = "Darwin" ]; then
-        if ! command -v macfuse &> /dev/null && [ ! -d "/Library/Filesystems/macfuse.fs" ]; then
+        if ! has_cmd macfuse && [ ! -d "/Library/Filesystems/macfuse.fs" ]; then
             log WARN "macFUSE might not be installed. It is required for mounting on macOS."
             log WARN "  Install via Homebrew: brew install --cask macfuse"
         fi
     else
-        if ! command -v fusermount &> /dev/null && ! command -v fusermount3 &> /dev/null; then
+        if ! has_cmd fusermount && ! has_cmd fusermount3; then
             log FAIL "fuse not found. rclone requires FUSE to mount on Linux."
             log FAIL "  Debian/Ubuntu: sudo apt install fuse3"
+            exit 1
+        fi
+    fi
+
+    if [ -n "$CONFIG_FILE" ]; then
+        if ! has_cmd python3; then
+            log FAIL "python3 not found. It is required to parse the JSON config file."
             exit 1
         fi
     fi
@@ -120,6 +171,70 @@ assert_remote_exists() {
         exit 1
     fi
     log OK "Remote '${name}:' validated."
+}
+
+assert_disk_space() {
+    local path="$1"
+    local required_gb=5
+    local free_kb
+
+    if [ "$OS" = "Darwin" ]; then
+        free_kb=$(df -k "$path" | awk 'NR==2 {print $4}')
+    else
+        free_kb=$(df -P -k "$path" | awk 'NR==2 {print $4}')
+    fi
+
+    if [ -n "$free_kb" ]; then
+        local free_gb=$((free_kb / 1024 / 1024))
+        if [ "$free_gb" -lt "$required_gb" ]; then
+            log WARN "Low disk space on cache drive: ${free_gb}GB free (recommended >= ${required_gb}GB)."
+        else
+            log OK "Cache drive: ${free_gb}GB free."
+        fi
+    fi
+}
+
+invoke_log_rotation() {
+    local log_file="$1"
+    if [ ! -f "$log_file" ]; then
+        return
+    fi
+
+    local size
+    if [ "$OS" = "Darwin" ]; then
+        size=$(stat -f%z "$log_file")
+    else
+        size=$(stat -c%s "$log_file")
+    fi
+
+    if [ "$size" -gt "$LOG_MAX_BYTES" ]; then
+        log INFO "Rotating log (exceeds 5MB)..."
+        for i in 3 2 1; do
+            if [ -f "$log_file.$i" ]; then
+                if [ "$i" -eq 3 ]; then
+                    rm -f "$log_file.$i"
+                else
+                    mv "$log_file.$i" "$log_file.$((i+1))"
+                fi
+            fi
+        done
+        mv "$log_file" "$log_file.1"
+    fi
+}
+
+clear_vfs_cache() {
+    log HEAD "VFS Cache Purge"
+    local paths=(
+        "$HOME/.cache/rclone/vfs"
+        "$CACHE_PATH/vfs"
+        "$HOME/Library/Caches/rclone/vfs"
+    )
+    for p in "${paths[@]}"; do
+        if [ -d "$p" ]; then
+            rm -rf "${p:?}/"*
+            log OK "Cleared: $p"
+        fi
+    done
 }
 
 invoke_mount() {
@@ -140,12 +255,15 @@ invoke_mount() {
     mkdir -p "$CACHE_PATH"
     mkdir -p "$m_point"
 
+    assert_disk_space "$CACHE_PATH"
+    invoke_log_rotation "$log_file"
+
     # Stop stale process
     if [ -f "$pid_file" ]; then
         local old_pid=$(cat "$pid_file")
         if kill -0 "$old_pid" 2>/dev/null; then
             log WARN "Stopping stale rclone on ${m_point} (PID $old_pid)..."
-            kill -15 "$old_pid" || kill -9 "$old_pid"
+            kill -15 "$old_pid" 2>/dev/null || kill -9 "$old_pid" 2>/dev/null
             sleep 2
         fi
         rm -f "$pid_file"
@@ -189,13 +307,17 @@ invoke_mount() {
     fi
 
     log HEAD "Mounting ${r_name}: -> ${m_point}"
+    log INFO "Cache mode   : $VFS_CACHE_MODE  |  Max size: $CACHE_MAX_SIZE"
+    log INFO "Buffer       : $BUFFER_SIZE  |  Chunk: $DRIVE_CHUNK_SIZE"
+    if [ "$BW_LIMIT" != "0" ]; then log INFO "Bandwidth cap: $BW_LIMIT"; fi
+    log INFO "Log file     : $log_file"
 
     # Execute and capture daemonized PID
     "${mount_cmd[@]}"
 
     # Rclone --daemon forks to background. We need to find its PID.
-    # We wait up to 10s for the mount to appear
-    local timeout=10
+    # Wait up to 20s for the mount to appear
+    local timeout=20
     local mounted=false
     for ((i=0; i<timeout; i++)); do
         if mount | grep -q "on ${m_point} "; then
@@ -249,14 +371,23 @@ invoke_unmount() {
         pkill -x rclone || true
     fi
 
-    # Cleanup any dangling fuse mounts in cache
-    for dir in "$CACHE_PATH"/*/ ; do
-        if mount | grep -q "on ${dir%/} "; then
+    # Explicitly unmount only the mountpoints defined in our config or CLI
+    # This avoids dangerously unmounting unrelated user fuse mounts.
+    for i in "${!REMOTES[@]}"; do
+        local configured_remote="${REMOTES[$i]}"
+        local m_point="${MOUNT_POINTS[$i]}"
+
+        if [ "$r_name" != "*" ] && [ "$r_name" != "$configured_remote" ]; then
+            continue
+        fi
+
+        if mount | grep -q "on ${m_point} "; then
             if [ "$OS" = "Darwin" ]; then
-                diskutil unmount force "${dir%/}" >/dev/null 2>&1 || umount -f "${dir%/}" >/dev/null 2>&1
+                diskutil unmount force "$m_point" >/dev/null 2>&1 || umount -f "$m_point" >/dev/null 2>&1
             else
-                fusermount -uz "${dir%/}" >/dev/null 2>&1 || umount -f "${dir%/}" >/dev/null 2>&1
+                fusermount -uz "$m_point" >/dev/null 2>&1 || umount -f "$m_point" >/dev/null 2>&1
             fi
+            log OK "Unmounted $m_point"
         fi
     done
     sleep 2
@@ -272,7 +403,13 @@ show_status() {
         local name=$(basename "$pid_file" | sed 's/^rclone_//;s/\.pid$//')
 
         if kill -0 "$pid" 2>/dev/null; then
-            log OK "[${name}]  PID: $pid is running."
+            local uptime="N/A"
+            if [ "$OS" = "Darwin" ]; then
+                uptime=$(ps -p "$pid" -o etime= | xargs)
+            else
+                uptime=$(ps -p "$pid" -o etimes= | awk '{printf "%dd %02dh %02dm\n", $1/86400, ($1%86400)/3600, ($1%3600)/60}')
+            fi
+            log OK "[${name}]  PID: $pid  |  Uptime: $uptime"
         else
             log WARN "[${name}]  PID $pid not found -- process may have crashed."
         fi
@@ -287,15 +424,72 @@ show_status() {
         log INFO "Path : $CACHE_PATH"
         log INFO "Used : $size"
     fi
+
+    log HEAD "Recent Logs"
+    for log_file in "${CACHE_PATH}"/mount_*.log; do
+        [ -e "$log_file" ] || continue
+        local name=$(basename "$log_file" | sed 's/^mount_//;s/\.log$//')
+        echo ""
+        echo -e "  \033[36m-- $name --\033[0m"
+        tail -n 10 "$log_file" | while read -r line; do
+            echo -e "    \033[90m$line\033[0m"
+        done
+    done
+}
+
+save_default_config() {
+    local path="$1"
+    cat <<EOF > "$path"
+{
+  "_comment": "Edit this file, then run: ./mount-gdrive.sh --config-file config.json",
+  "remotes": [
+    {
+      "name": "gdrive",
+      "mountPoint": "$DEFAULT_MOUNT",
+      "enabled": true
+    },
+    {
+      "name": "onedrive",
+      "mountPoint": "$HOME/onedrive",
+      "enabled": false
+    }
+  ],
+  "cachePath": "$CACHE_PATH",
+  "vfsCacheMode": "full",
+  "cacheMaxSize": "20G",
+  "bufferSize": "128M",
+  "driveChunkSize": "128M",
+  "bwLimit": "0",
+  "watchdog": false,
+  "watchdogIntervalMinutes": 2
+}
+EOF
+    log OK "Starter config written: $path"
 }
 
 install_service() {
     log HEAD "Installing Auto-Start Services"
     local SCRIPT_PATH=$(realpath "$0")
+    local -a CMD_ARGS=("-a" "mount")
+
+    if [ -n "$CONFIG_FILE" ]; then
+        CMD_ARGS+=("--config-file" "$(realpath "$CONFIG_FILE")")
+    else
+        CMD_ARGS+=("-r" "$REMOTE" "-m" "$MOUNT_POINT" "-c" "$CACHE_PATH")
+    fi
 
     if [ "$OS" = "Darwin" ]; then
         # macOS launchd
         local PLIST_PATH="$HOME/Library/LaunchAgents/com.rclone.mount.plist"
+        mkdir -p "$HOME/Library/LaunchAgents"
+
+        local args_xml="<string>$SCRIPT_PATH</string>"
+        for arg in "${CMD_ARGS[@]}"; do
+            # Escape basic XML entities
+            arg=$(echo "$arg" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&#39;/g')
+            args_xml="$args_xml\n        <string>$arg</string>"
+        done
+
         cat <<EOF > "$PLIST_PATH"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -305,9 +499,7 @@ install_service() {
     <string>com.rclone.mount</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$SCRIPT_PATH</string>
-        <string>-a</string>
-        <string>mount</string>
+        $args_xml
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -315,7 +507,6 @@ install_service() {
 </plist>
 EOF
         if [ "$WATCHDOG" = true ]; then
-            # Insert StartInterval for watchdog (in seconds)
             local interval_sec=$(( WATCHDOG_INTERVAL * 60 ))
             sed -i '' -e "/<\/dict>/i\\
     <key>StartInterval</key>\\
@@ -333,6 +524,13 @@ EOF
         mkdir -p "$SERVICE_DIR"
         local SERVICE_PATH="$SERVICE_DIR/rclone-mount.service"
 
+        # Build the command string properly escaping for systemd ExecStart
+        local exec_start="$SCRIPT_PATH"
+        for arg in "${CMD_ARGS[@]}"; do
+            # Systemd requires specific quoting; using printf %q provides safe shell quoting
+            exec_start="$exec_start $(printf '%q' "$arg")"
+        done
+
         cat <<EOF > "$SERVICE_PATH"
 [Unit]
 Description=Rclone Mount Manager
@@ -340,7 +538,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=$SCRIPT_PATH -a mount
+ExecStart=$exec_start
 RemainAfterExit=yes
 ExecStop=$SCRIPT_PATH -a unmount
 
@@ -394,12 +592,31 @@ uninstall_service() {
     fi
 }
 
+# Load config if specified
+if [ -n "$CONFIG_FILE" ]; then
+    if [ ! -f "$CONFIG_FILE" ]; then
+        log FAIL "Config file not found: $CONFIG_FILE"
+        exit 1
+    fi
+    eval "$(parse_config)"
+    log OK "Config loaded: $CONFIG_FILE"
+else
+    REMOTES=("$REMOTE")
+    MOUNT_POINTS=("$MOUNT_POINT")
+fi
+
 
 # Dispatch
 case "$ACTION" in
     mount)
         assert_prerequisites
-        invoke_mount "$REMOTE" "$MOUNT_POINT"
+        clear_vfs_cache
+        for i in "${!REMOTES[@]}"; do
+            invoke_mount "${REMOTES[$i]}" "${MOUNT_POINTS[$i]}"
+        done
+        if [ "$WATCHDOG" = true ]; then
+            install_service
+        fi
         ;;
     unmount)
         invoke_unmount "*"
@@ -410,9 +627,18 @@ case "$ACTION" in
     restart)
         invoke_unmount "*"
         assert_prerequisites
-        invoke_mount "$REMOTE" "$MOUNT_POINT"
+        for i in "${!REMOTES[@]}"; do
+            invoke_mount "${REMOTES[$i]}" "${MOUNT_POINTS[$i]}"
+        done
         ;;
     install)
+        if [ -n "$CONFIG_FILE" ] && [ ! -f "$CONFIG_FILE" ]; then
+            mkdir -p "$(dirname "$CONFIG_FILE")"
+            save_default_config "$CONFIG_FILE"
+        elif [ -z "$CONFIG_FILE" ] && [ ! -f "$CACHE_PATH/config.json" ]; then
+            mkdir -p "$CACHE_PATH"
+            save_default_config "$CACHE_PATH/config.json"
+        fi
         install_service
         ;;
     uninstall)
