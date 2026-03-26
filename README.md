@@ -18,21 +18,16 @@ This suite is designed for power users who require absolute stability, zero-I/O 
 
 ---
 
-## 📦 Prerequisites
+## 📦 Zero-Touch Prerequisites (Auto-Install)
 
-### Windows
-1. **[Rclone](https://rclone.org/downloads/)**: Must be in your system `PATH`.
-2. **[WinFsp](https://winfsp.dev/rel/)**: Required by rclone to map drives.
+The suite is designed for a **100% zero-touch deployment**. If any underlying dependencies (`rclone`, `WinFsp`, `macFUSE`, `fuse3`, or `python3`) are missing, the scripts will automatically fetch and install the latest versions directly from the official sources before continuing.
 
-### macOS (Intel & Apple Silicon)
-1. **Rclone**: `brew install rclone`
-2. **macFUSE**: `brew install --cask macfuse` (You may need to allow kernel extensions in macOS Security settings).
-3. **Python 3**: Pre-installed on macOS, used to parse JSON configs.
+**Auto-Installation Mechanisms:**
+- **Windows**: Automatically utilizes `winget` to pull `Rclone.Rclone` and `WinFsp.WinFsp`.
+- **macOS**: Automatically installs Homebrew (if missing), then `brew install rclone macfuse python`. *(Note: `macFUSE` requires manual kernel extension approval in System Settings > Security).*
+- **Linux**: Automatically utilizes `apt-get`, `dnf`, `pacman`, or the official `curl` bash scripts depending on your distribution.
 
-### Linux (Ubuntu/Debian, CentOS, Raspberry Pi)
-1. **Rclone**: `curl https://rclone.org/install.sh | sudo bash`
-2. **FUSE3**: `sudo apt install fuse3`
-3. **Python 3**: `sudo apt install python3`
+*Just run the scripts; they handle the rest.*
 
 ---
 

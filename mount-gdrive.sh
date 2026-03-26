@@ -130,37 +130,82 @@ has_cmd() {
 }
 
 assert_prerequisites() {
-    log HEAD "Prerequisites"
+    log HEAD "Prerequisites (Auto-Installer)"
+
+    local needs_restart=false
+
+    # 1. Rclone
     if ! has_cmd rclone; then
-        log FAIL "rclone not found in PATH."
+        log WARN "rclone not found. Attempting auto-installation..."
         if [ "$OS" = "Darwin" ]; then
-            log FAIL "  Install via Homebrew: brew install rclone"
+            if ! has_cmd brew; then
+                log WARN "Homebrew not found. Installing Homebrew..."
+                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            fi
+            brew install rclone
         else
-            log FAIL "  Install via script: sudo -v ; curl https://rclone.org/install.sh | sudo bash"
+            sudo -v || true
+            curl -fsSL https://rclone.org/install.sh | sudo bash
         fi
-        exit 1
+
+        if ! has_cmd rclone; then
+            log FAIL "rclone auto-install failed. Please install manually."
+            exit 1
+        fi
+        needs_restart=true
     fi
     local v=$(rclone version | grep "rclone v" | head -n 1 | xargs)
     log OK "rclone -- $v"
 
+    # 2. FUSE Dependencies
     if [ "$OS" = "Darwin" ]; then
         if ! has_cmd macfuse && [ ! -d "/Library/Filesystems/macfuse.fs" ]; then
-            log WARN "macFUSE might not be installed. It is required for mounting on macOS."
-            log WARN "  Install via Homebrew: brew install --cask macfuse"
+            log WARN "macFUSE not found. Attempting auto-installation via Homebrew..."
+            if ! has_cmd brew; then
+                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            fi
+            brew install --cask macfuse
+            log INFO "macFUSE requires kernel extension approval in System Settings > Security."
+            needs_restart=true
         fi
+        log OK "macFUSE installed."
     else
         if ! has_cmd fusermount && ! has_cmd fusermount3; then
-            log FAIL "fuse not found. rclone requires FUSE to mount on Linux."
-            log FAIL "  Debian/Ubuntu: sudo apt install fuse3"
-            exit 1
+            log WARN "FUSE not found. Attempting auto-installation..."
+            if has_cmd apt-get; then
+                sudo apt-get update && sudo apt-get install -y fuse3
+            elif has_cmd dnf; then
+                sudo dnf install -y fuse3
+            elif has_cmd pacman; then
+                sudo pacman -S --noconfirm fuse3
+            else
+                log FAIL "Unsupported package manager. Please install fuse3 manually."
+                exit 1
+            fi
+            needs_restart=true
         fi
+        log OK "FUSE subsystem available."
     fi
 
+    # 3. Python 3 (For JSON parsing)
     if [ -n "$CONFIG_FILE" ]; then
         if ! has_cmd python3; then
-            log FAIL "python3 not found. It is required to parse the JSON config file."
-            exit 1
+            log WARN "python3 not found. Attempting auto-installation..."
+            if [ "$OS" = "Darwin" ]; then
+                brew install python
+            elif has_cmd apt-get; then
+                sudo apt-get update && sudo apt-get install -y python3
+            elif has_cmd dnf; then
+                sudo dnf install -y python3
+            elif has_cmd pacman; then
+                sudo pacman -S --noconfirm python3
+            fi
         fi
+        log OK "python3 available."
+    fi
+
+    if $needs_restart; then
+        log INFO "Dependencies were just installed. You may need to restart your terminal or approve OS security prompts."
     fi
 }
 

@@ -219,28 +219,48 @@ function Invoke-LogRotation {
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Prerequisites: rclone + WinFsp
+#  Prerequisites: rclone + WinFsp (Auto-Installer)
 # ══════════════════════════════════════════════════════════════════════════════
 function Assert-Prerequisites {
     Write-Log "HEAD" "Prerequisites"
 
+    $needsRestart = $false
+
+    # 1. Rclone
     if (-not (Get-Command "rclone" -ErrorAction SilentlyContinue)) {
-        Write-Log "FAIL" "rclone not found in PATH."
-        Write-Log "FAIL" "  winget : winget install Rclone.Rclone"
-        Write-Log "FAIL" "  Manual : https://rclone.org/downloads/"
-        exit 1
+        Write-Log "WARN" "rclone not found. Attempting auto-installation via winget..."
+        Start-Process winget -ArgumentList "install --exact Rclone.Rclone --accept-source-agreements --accept-package-agreements --silent" -Wait -NoNewWindow
+
+        # Refresh environment variables so powershell sees the new PATH
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+        if (-not (Get-Command "rclone" -ErrorAction SilentlyContinue)) {
+            Write-Log "FAIL" "rclone auto-install failed. Please install manually: https://rclone.org/downloads/"
+            exit 1
+        }
+        $needsRestart = $true
     }
     $v = (& rclone version 2>&1 | Select-String "rclone v" | Select-Object -First 1).ToString().Trim()
     Write-Log "OK" "rclone -- $v"
 
+    # 2. WinFsp
     $winfsp = Get-Service -Name "WinFsp*" -ErrorAction SilentlyContinue
     if (-not $winfsp) {
-        Write-Log "FAIL" "WinFsp service not found. rclone requires WinFsp to mount on Windows."
-        Write-Log "FAIL" "  winget : winget install WinFsp.WinFsp"
-        Write-Log "FAIL" "  Manual : https://winfsp.dev/rel/"
-        exit 1
+        Write-Log "WARN" "WinFsp service not found. Attempting auto-installation via winget..."
+        Start-Process winget -ArgumentList "install --exact WinFsp.WinFsp --accept-source-agreements --accept-package-agreements --silent" -Wait -NoNewWindow
+
+        $winfsp = Get-Service -Name "WinFsp*" -ErrorAction SilentlyContinue
+        if (-not $winfsp) {
+            Write-Log "FAIL" "WinFsp auto-install failed. Please install manually: https://winfsp.dev/rel/"
+            exit 1
+        }
+        $needsRestart = $true
     }
     Write-Log "OK" "WinFsp -- $($winfsp.Name) [$($winfsp.Status)]"
+
+    if ($needsRestart) {
+        Write-Log "INFO" "Dependencies were just installed. You may need to restart your PowerShell session or computer for background mounting to work flawlessly."
+    }
 }
 
 
@@ -476,7 +496,8 @@ function Invoke-Mount {
     # Wait up to 20s for the drive letter to become visible in the shell
     $timeout = 20; $elapsed = 0; $mounted = $false
     while ($elapsed -lt $timeout) {
-        if (Get-PSDrive -Name $letter -ErrorAction SilentlyContinue) { $mounted = $true; break }
+        # For network mode mounts or elevated mounts, Get-PSDrive can fail to see it immediately.
+        if (Test-Path "$($Letter)\" -ErrorAction SilentlyContinue) { $mounted = $true; break }
         Start-Sleep -Seconds 1; $elapsed++
     }
 
@@ -608,7 +629,7 @@ function Install-ScheduledTasks {
     $principal = New-ScheduledTaskPrincipal `
         -UserId    $who `
         -LogonType Interactive `
-        -RunLevel  Highest
+        -RunLevel  LeastPrivilege
 
     $settings = New-ScheduledTaskSettingsSet `
         -ExecutionTimeLimit         (New-TimeSpan -Hours 0) `
@@ -705,6 +726,14 @@ $primaryCache = $remoteList[0].CachePath
 switch ($Action) {
 
     "Mount" {
+        $isElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if ($isElevated -and -not $Silent) {
+            Write-Log "WARN" "You are running this script as Administrator."
+            Write-Log "WARN" "Because --network-mode is used, Windows will isolate the mapped drive to this elevated session."
+            Write-Log "WARN" "The drive will likely NOT be visible in Windows Explorer. Run as a standard user instead."
+            Write-Host ""
+        }
+
         Assert-Prerequisites
         Assert-NetworkConnectivity
         Assert-DiskSpace -Path $primaryCache -RequiredGB 5
