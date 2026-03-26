@@ -39,6 +39,9 @@ Once dependencies are installed, **an Interactive Setup Wizard will launch**, gu
 
 *That's it. Your cloud storage is now natively mounted and will survive reboots.*
 
+## Shellcheck and Testing
+Both `Mount-GDrive.ps1` and `mount-gdrive.sh` are thoroughly linted with Shellcheck and PSScriptAnalyzer respectively to ensure maximum execution stability across OS variations.
+
 ---
 
 ## 📦 Zero-Touch Architecture (Auto-Install)

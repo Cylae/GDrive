@@ -63,7 +63,8 @@ done
 log() {
     local level=$1
     shift
-    local ts=$(date "+%Y-%m-%d %H:%M:%S")
+    local ts
+    ts=$(date "+%Y-%m-%d %H:%M:%S")
     local color="\033[0m"
     case $level in
         OK) color="\033[32m" ;;
@@ -144,7 +145,8 @@ assert_prerequisites() {
         fi
         needs_restart=true
     fi
-    local v=$(rclone version | grep "rclone v" | head -n 1 | xargs)
+    local v
+    v=$(rclone version | grep "rclone v" | head -n 1 | xargs)
     log OK "rclone -- $v"
 
     if [ "$OS" = "Darwin" ]; then
@@ -239,7 +241,8 @@ invoke_daemon() {
 
 install_services() {
     log HEAD "Installing OS-Native Services"
-    local SCRIPT_PATH=$(realpath "$0")
+    local SCRIPT_PATH
+    SCRIPT_PATH=$(realpath "$0")
 
     for i in "${!REMOTES[@]}"; do
         local r_name="${REMOTES[$i]}"
@@ -334,7 +337,8 @@ uninstall_services() {
     else
         for srv in "$HOME/.config/systemd/user/rclone-mount-"*.service; do
             [ -e "$srv" ] || continue
-            local srv_name=$(basename "$srv")
+            local srv_name
+            srv_name=$(basename "$srv")
             systemctl --user stop "$srv_name" 2>/dev/null || true
             systemctl --user disable "$srv_name" 2>/dev/null || true
             rm -f "$srv"
@@ -351,10 +355,13 @@ show_status() {
         for plist in "$HOME/Library/LaunchAgents/com.rclone.mount."*.plist; do
             [ -e "$plist" ] || continue
             found=true
-            local label=$(basename "$plist" .plist)
-            local pid=$(launchctl list | grep "$label" | awk '{print $1}')
+            local label
+            label=$(basename "$plist" .plist)
+            local pid
+            pid=$(launchctl list | grep "$label" | awk '{print $1}')
             if [[ "$pid" =~ ^[0-9]+$ ]]; then
-                local uptime=$(ps -p "$pid" -o etime= | xargs)
+                local uptime
+                uptime=$(ps -p "$pid" -o etime= | xargs)
                 log OK "[$label]  PID: $pid  |  Uptime: $uptime"
             else
                 log WARN "[$label] Not running or crashed."
@@ -366,11 +373,15 @@ show_status() {
         for srv in "$HOME/.config/systemd/user/rclone-mount-"*.service; do
             [ -e "$srv" ] || continue
             found=true
-            local srv_name=$(basename "$srv")
-            local state=$(systemctl --user is-active "$srv_name" 2>/dev/null || echo "inactive")
+            local srv_name
+            srv_name=$(basename "$srv")
+            local state
+            state=$(systemctl --user is-active "$srv_name" 2>/dev/null || echo "inactive")
             if [ "$state" = "active" ]; then
-                local pid=$(systemctl --user show -p MainPID --value "$srv_name")
-                local uptime=$(ps -p "$pid" -o etimes= | awk '{printf "%dd %02dh %02dm\n", $1/86400, ($1%86400)/3600, ($1%3600)/60}')
+                local pid
+                pid=$(systemctl --user show -p MainPID --value "$srv_name")
+                local uptime
+                uptime=$(ps -p "$pid" -o etimes= | awk '{printf "%dd %02dh %02dm\n", $1/86400, ($1%86400)/3600, ($1%3600)/60}')
                 log OK "[$srv_name]  PID: $pid  |  Uptime: $uptime"
             else
                 log WARN "[$srv_name] State: $state"
@@ -394,7 +405,7 @@ case "$ACTION" in
         echo -e "  \033[36mWelcome to the Universal Rclone Mount Manager Setup.\033[0m"
         echo -e "  You can mount Google Drive, OneDrive, Amazon S3, Dropbox, and 40+ more providers."
         echo ""
-        read -p "  Do you need to configure a NEW cloud remote now? [y/N]: " setup_new
+        read -r -p "  Do you need to configure a NEW cloud remote now? [y/N]: " setup_new
         if [[ "$setup_new" =~ ^[Yy]$ ]]; then
             rclone config
         fi
@@ -411,22 +422,22 @@ case "$ACTION" in
 
         echo -e "  Available remotes: \033[32m$available_remotes\033[0m"
 
-        local json_remotes=""
-        local default_remote
+        json_remotes=""
+        default_remote=""
         if echo "$available_remotes" | grep -qw "gdrive"; then default_remote="gdrive"; else default_remote=$(echo "$available_remotes" | awk '{print $1}'); fi
 
         while true; do
-            local user_remote=""
+            user_remote=""
             while true; do
-                read -p "  Which remote would you like to auto-mount? [Default: $default_remote]: " user_remote
+                read -r -p "  Which remote would you like to auto-mount? [Default: $default_remote]: " user_remote
                 user_remote=${user_remote:-$default_remote}
                 if echo "$available_remotes" | grep -qw "$user_remote"; then break; fi
                 log WARN "Invalid remote '$user_remote'. Please choose from: $available_remotes"
             done
 
-            local user_mount=""
+            user_mount=""
             while true; do
-                read -p "  Where should it be mounted? [Default: $DEFAULT_MOUNT]: " user_mount
+                read -r -p "  Where should it be mounted? [Default: $DEFAULT_MOUNT]: " user_mount
                 user_mount=${user_mount:-$DEFAULT_MOUNT}
 
                 # Expand ~ to $HOME
@@ -444,7 +455,7 @@ case "$ACTION" in
                             log WARN "Directory is currently mounted by another process."
                             continue
                         fi
-                        read -p "  Warning: Directory '$user_mount' is not empty. Mount over it anyway? [y/N]: " force_mount
+                        read -r -p "  Warning: Directory '$user_mount' is not empty. Mount over it anyway? [y/N]: " force_mount
                         if [[ ! "$force_mount" =~ ^[Yy]$ ]]; then continue; fi
                     fi
                 fi
@@ -461,7 +472,7 @@ EOF
 )"
 
             echo ""
-            read -p "  Would you like to mount another remote? [y/N]: " add_another
+            read -r -p "  Would you like to mount another remote? [y/N]: " add_another
             if [[ ! "$add_another" =~ ^[Yy]$ ]]; then break; fi
             echo ""
         done
@@ -471,10 +482,10 @@ EOF
 
         echo ""
         log HEAD "Advanced Settings"
-        read -p "  Maximum Local Cache Size [Default: 20G]: " user_cache
+        read -r -p "  Maximum Local Cache Size [Default: 20G]: " user_cache
         user_cache=${user_cache:-20G}
 
-        read -p "  Bandwidth Limit (e.g. 10M, or 0 for unlimited) [Default: 0]: " user_bw
+        read -r -p "  Bandwidth Limit (e.g. 10M, or 0 for unlimited) [Default: 0]: " user_bw
         user_bw=${user_bw:-0}
 
         cfg_path="$CACHE_PATH/config.json"
