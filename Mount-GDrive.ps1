@@ -810,32 +810,50 @@ switch ($Action) {
         Write-Host "  Available remotes: " -NoNewline; Write-Host $available -ForegroundColor Green
 
         $defaultRemote = if ($remoteNames.Contains("gdrive")) { "gdrive" } else { $remoteNames[0] }
+        $remotesConfig = @()
 
-        $userRemote = ""
         while ($true) {
-            $userRemote = Read-Host "  Which remote would you like to auto-mount? [Default: $defaultRemote]"
-            if ([string]::IsNullOrWhiteSpace($userRemote)) { $userRemote = $defaultRemote }
-            if ($remoteNames -contains $userRemote) { break }
-            Write-Log "WARN" "Invalid remote '$userRemote'. Please choose from: $available"
-        }
-
-        $userMount = ""
-        while ($true) {
-            $userMount = Read-Host "  Which drive letter should it map to? [Default: X:]"
-            if ([string]::IsNullOrWhiteSpace($userMount)) { $userMount = "X:" }
-            $userMount = $userMount.Trim().ToUpper()
-            if ($userMount.Length -eq 1 -and $userMount -match "^[A-Z]$") { $userMount += ":" }
-
-            if ($userMount -match "^[A-Z]:$") {
-                if (Test-Path "$userMount\") {
-                    Write-Log "WARN" "Drive $userMount is already in use. Please choose an available letter."
-                } else {
-                    break
-                }
-            } else {
-                Write-Log "WARN" "Invalid format. Enter a single letter (e.g., Z: or M)."
+            $userRemote = ""
+            while ($true) {
+                $userRemote = Read-Host "  Which remote would you like to auto-mount? [Default: $defaultRemote]"
+                if ([string]::IsNullOrWhiteSpace($userRemote)) { $userRemote = $defaultRemote }
+                if ($remoteNames -contains $userRemote) { break }
+                Write-Log "WARN" "Invalid remote '$userRemote'. Please choose from: $available"
             }
+
+            $userMount = ""
+            while ($true) {
+                $userMount = Read-Host "  Which drive letter should it map to? [Default: X:]"
+                if ([string]::IsNullOrWhiteSpace($userMount)) { $userMount = "X:" }
+                $userMount = $userMount.Trim().ToUpper()
+                if ($userMount.Length -eq 1 -and $userMount -match "^[A-Z]$") { $userMount += ":" }
+
+                if ($userMount -match "^[A-Z]:$") {
+                    if (Test-Path "$userMount\") {
+                        Write-Log "WARN" "Drive $userMount is already in use. Please choose an available letter."
+                    } else {
+                        break
+                    }
+                } else {
+                    Write-Log "WARN" "Invalid format. Enter a single letter (e.g., Z: or M)."
+                }
+            }
+
+            $remotesConfig += [ordered]@{ name = $userRemote; mountPoint = $userMount; enabled = $true }
+
+            Write-Host ""
+            $addAnother = Read-Host "  Would you like to mount another remote? [y/N]"
+            if (-not ($addAnother -match "^[Yy]")) { break }
+            Write-Host ""
         }
+
+        Write-Host ""
+        Write-Log "HEAD" "Advanced Settings"
+        $userCache = Read-Host "  Maximum Local Cache Size [Default: 20G]"
+        if ([string]::IsNullOrWhiteSpace($userCache)) { $userCache = "20G" }
+
+        $userBw = Read-Host "  Bandwidth Limit (e.g. 10M, or 0 for unlimited) [Default: 0]"
+        if ([string]::IsNullOrWhiteSpace($userBw)) { $userBw = "0" }
 
         if (-not (Test-Path $CachePath)) {
             New-Item -ItemType Directory -Force -Path $CachePath | Out-Null
@@ -844,15 +862,13 @@ switch ($Action) {
         if ($ConfigFile) { $cfgPath = $ConfigFile }
 
         $template = [ordered]@{
-            remotes      = @(
-                [ordered]@{ name = $userRemote; mountPoint = $userMount; enabled = $true  }
-            )
+            remotes                 = $remotesConfig
             cachePath               = $CachePath
             vfsCacheMode            = "full"
-            cacheMaxSize            = "20G"
+            cacheMaxSize            = $userCache
             bufferSize              = "128M"
             driveChunkSize          = "128M"
-            bwLimit                 = "0"
+            bwLimit                 = $userBw
             watchdog                = $true
             watchdogIntervalMinutes = 2
         }

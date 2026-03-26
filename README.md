@@ -28,9 +28,12 @@ These scripts configure `rclone` mounts with highly optimized flags designed for
 
 Getting started is fully automated and flawless. Just run the installer designed for your OS. If you are missing any dependencies (e.g., `rclone`, `WinFsp`, `macFUSE`, `fuse3`, or `python3`), the installer will automatically download, install, and configure the latest versions directly from official sources in the background.
 
-Once dependencies are installed, **an Interactive Setup Wizard will launch**, guiding you to connect to your preferred cloud provider (Google Drive, OneDrive, S3, Dropbox, etc.) and asking you where you'd like it mounted.
+Once dependencies are installed, **an Interactive Setup Wizard will launch**, guiding you through:
+1. Connecting to your preferred cloud provider (Google Drive, OneDrive, S3, Dropbox, etc.).
+2. Selecting which remotes to mount, and where to mount them (e.g. `X:`, `/mnt/gdrive`). You can configure **multiple remotes** in a single session.
+3. Tuning advanced performance settings (e.g., maximizing the Local Cache Size or setting Bandwidth Limits).
 
-- **Windows**: Right-click `Install-Windows.bat` and select **Run as Administrator** (or double-click and approve the UAC prompt). It handles `winget` dependencies, configures your Task Scheduler, and mounts the drive to `X:` immediately.
+- **Windows**: Right-click `Install-Windows.bat` and select **Run as Administrator** (or double-click and approve the UAC prompt). It handles `winget` dependencies, launches the wizard, configures your Task Scheduler, and maps your drives immediately.
 - **macOS**: Double-click `Install-macOS.command` inside Finder. It automatically installs Homebrew (if needed), `macFUSE`, and configures the `launchd` auto-start service.
 - **Linux**: Run `./Install-Linux.sh` in your terminal. It leverages your native package manager (APT/DNF/Pacman) and configures your `systemd` user service.
 

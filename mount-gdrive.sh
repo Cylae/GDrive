@@ -411,41 +411,71 @@ case "$ACTION" in
 
         echo -e "  Available remotes: \033[32m$available_remotes\033[0m"
 
-        default_remote=""
+        local json_remotes=""
+        local default_remote
         if echo "$available_remotes" | grep -qw "gdrive"; then default_remote="gdrive"; else default_remote=$(echo "$available_remotes" | awk '{print $1}'); fi
 
         while true; do
-            read -p "  Which remote would you like to auto-mount? [Default: $default_remote]: " user_remote
-            user_remote=${user_remote:-$default_remote}
-            if echo "$available_remotes" | grep -qw "$user_remote"; then break; fi
-            log WARN "Invalid remote '$user_remote'. Please choose from: $available_remotes"
-        done
+            local user_remote=""
+            while true; do
+                read -p "  Which remote would you like to auto-mount? [Default: $default_remote]: " user_remote
+                user_remote=${user_remote:-$default_remote}
+                if echo "$available_remotes" | grep -qw "$user_remote"; then break; fi
+                log WARN "Invalid remote '$user_remote'. Please choose from: $available_remotes"
+            done
 
-        while true; do
-            read -p "  Where should it be mounted? [Default: $DEFAULT_MOUNT]: " user_mount
-            user_mount=${user_mount:-$DEFAULT_MOUNT}
+            local user_mount=""
+            while true; do
+                read -p "  Where should it be mounted? [Default: $DEFAULT_MOUNT]: " user_mount
+                user_mount=${user_mount:-$DEFAULT_MOUNT}
 
-            # Expand ~ to $HOME
-            user_mount="${user_mount/#\~/$HOME}"
+                # Expand ~ to $HOME
+                user_mount="${user_mount/#\~/$HOME}"
 
-            # Enforce absolute path
-            if [[ "$user_mount" != /* ]]; then
-                log WARN "Mount path must be absolute (start with / or ~)."
-                continue
-            fi
-
-            if [ -d "$user_mount" ]; then
-                if [ "$(ls -A "$user_mount" 2>/dev/null)" ]; then
-                    if mount | grep -q "on ${user_mount} "; then
-                        log WARN "Directory is currently mounted by another process."
-                        continue
-                    fi
-                    read -p "  Warning: Directory '$user_mount' is not empty. Mount over it anyway? [y/N]: " force_mount
-                    if [[ ! "$force_mount" =~ ^[Yy]$ ]]; then continue; fi
+                # Enforce absolute path
+                if [[ "$user_mount" != /* ]]; then
+                    log WARN "Mount path must be absolute (start with / or ~)."
+                    continue
                 fi
-            fi
-            break
+
+                if [ -d "$user_mount" ]; then
+                    if [ "$(ls -A "$user_mount" 2>/dev/null)" ]; then
+                        if mount | grep -q "on ${user_mount} "; then
+                            log WARN "Directory is currently mounted by another process."
+                            continue
+                        fi
+                        read -p "  Warning: Directory '$user_mount' is not empty. Mount over it anyway? [y/N]: " force_mount
+                        if [[ ! "$force_mount" =~ ^[Yy]$ ]]; then continue; fi
+                    fi
+                fi
+                break
+            done
+
+            json_remotes+="$(cat <<EOF
+    {
+      "name": "$user_remote",
+      "mountPoint": "$user_mount",
+      "enabled": true
+    },
+EOF
+)"
+
+            echo ""
+            read -p "  Would you like to mount another remote? [y/N]: " add_another
+            if [[ ! "$add_another" =~ ^[Yy]$ ]]; then break; fi
+            echo ""
         done
+
+        # Remove trailing comma from json_remotes
+        json_remotes="${json_remotes%,}"
+
+        echo ""
+        log HEAD "Advanced Settings"
+        read -p "  Maximum Local Cache Size [Default: 20G]: " user_cache
+        user_cache=${user_cache:-20G}
+
+        read -p "  Bandwidth Limit (e.g. 10M, or 0 for unlimited) [Default: 0]: " user_bw
+        user_bw=${user_bw:-0}
 
         cfg_path="$CACHE_PATH/config.json"
         if [ -n "$CONFIG_FILE" ]; then cfg_path="$CONFIG_FILE"; fi
@@ -454,18 +484,14 @@ case "$ACTION" in
         cat <<EOF > "$cfg_path"
 {
   "remotes": [
-    {
-      "name": "$user_remote",
-      "mountPoint": "$user_mount",
-      "enabled": true
-    }
+$json_remotes
   ],
   "cachePath": "$CACHE_PATH",
   "vfsCacheMode": "full",
-  "cacheMaxSize": "20G",
+  "cacheMaxSize": "$user_cache",
   "bufferSize": "128M",
   "driveChunkSize": "128M",
-  "bwLimit": "0",
+  "bwLimit": "$user_bw",
   "watchdog": true
 }
 EOF
