@@ -104,7 +104,7 @@ try:
             print(f"MOUNT_POINTS+=({mp})")
 
 except Exception as e:
-    print(f"echo Error parsing JSON: {e} >&2", file=sys.stderr)
+    sys.stderr.write(f"Error parsing JSON: {e}\n")
     sys.exit(1)
 EOF
 }
