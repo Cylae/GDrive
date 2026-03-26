@@ -532,7 +532,7 @@ install_service() {
         for arg in "${CMD_ARGS[@]}"; do
             # Escape basic XML entities
             arg=$(echo "$arg" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&#39;/g')
-            args_xml="$args_xml\n        <string>$arg</string>"
+            args_xml="$args_xml"$'\n'"        <string>$arg</string>"
         done
 
         cat <<EOF > "$PLIST_PATH"

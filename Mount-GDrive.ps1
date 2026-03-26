@@ -458,7 +458,7 @@ function Invoke-Mount {
         "--poll-interval",        "60s",
         "--stats",                "0",
         "--network-mode",
-        "--volname",              "\\rclone\$RemoteName",
+        "--volname",              "$RemoteName",
         "--log-level",            "INFO",
         "--log-file",             $logFile
     ))
