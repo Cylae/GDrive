@@ -104,6 +104,7 @@ You can register the script to run automatically in the background using native 
 
 ## 🛠️ Troubleshooting
 
+- **Error 0x8007045D (Windows I/O Device Error)**: This occurs when Windows Explorer treats a FUSE mount as a physical local disk and tries to probe file attributes it doesn't support while copying or creating folders. The scripts now natively enforce `--network-mode` to mount as a mapped network drive, which mitigates this bug. If you still encounter it, ensure your local VFS cache drive (e.g., `C:\`) is not genuinely failing or out of space.
 - **macOS macFUSE Kext Errors**: Newer versions of macOS strongly restrict kernel extensions. If the script hangs or rclone fails to mount, go to `System Settings` > `Privacy & Security` > `Security` and click "Allow" for "macFUSE". You may need to reboot into Recovery Mode and lower the security policy to "Reduced Security" for kernel extensions to load.
 - **Linux systemd user services**: The auto-start services on Linux run under `systemctl --user`. If your mounts don't start at boot until you log in, you must enable lingering for your user account: `sudo loginctl enable-linger $USER`.
 - **Cache Drive Full**: The script enforces a strict 5GB minimum free space check to prevent `rclone` from writing a bad cache loop that soft-bricks your OS drive. You can increase or decrease this limit in the script directly (`assert_disk_space`).

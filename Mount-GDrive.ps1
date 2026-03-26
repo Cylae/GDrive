@@ -437,6 +437,7 @@ function Invoke-Mount {
         "--low-level-retries",    "10",
         "--poll-interval",        "60s",
         "--stats",                "0",
+        "--network-mode",
         "--log-level",            "INFO",
         "--log-file",             $logFile
     ))
