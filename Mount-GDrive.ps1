@@ -135,6 +135,10 @@ function Write-Log {
     }
 }
 
+# Polyfill for Windows PowerShell 5.1 which doesn't have $IsWindows
+if ($null -eq $IsWindows) {
+    $IsWindows = [bool]($PSVersionTable.Platform -eq "Win32NT" -or $PSVersionTable.Platform -eq $null)
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  JSON config support
